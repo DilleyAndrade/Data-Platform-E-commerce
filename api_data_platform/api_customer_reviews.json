@@ -1,0 +1,9 @@
+[
+  {
+    "review_id": 1,
+    "customer_id": 2,
+    "product_id": 1,
+    "rating": 5,
+    "comment": "Excelente notebook."
+  }
+]

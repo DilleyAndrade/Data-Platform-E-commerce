@@ -1,0 +1,8 @@
+uvicorn eh uma lib para execucao de http dentro do fastapi
+Em resumo ele cria o servidor http na porta 8000 por padrao
+
+Para executar a ai rode.
+uvicorn api_data_platform.main:app --reload
+
+por padrao o unicorv usa a porta 8000, se quiser abrir em outra porta use o comando
+uvicorn api_data_platform.main:app --reload --port 8080
