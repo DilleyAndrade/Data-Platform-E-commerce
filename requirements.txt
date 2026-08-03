@@ -10,3 +10,4 @@ python-dotenv
 boto3
 sqlalchemy
 psycopg[binary]
+pymysql
