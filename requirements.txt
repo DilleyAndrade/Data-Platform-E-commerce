@@ -3,10 +3,10 @@ pyspark==4.0.1
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pytest==8.4.1
-httpx==0.28.1
 requests
 pandas
 pyarrow
 python-dotenv
 boto3
-
+sqlalchemy
+psycopg[binary]
