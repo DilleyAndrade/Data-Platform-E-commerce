@@ -1,0 +1,3 @@
+payment_id,order_id,payment_method,payment_status,amount
+1,1001,PIX,APPROVED,4500
+2,1002,CREDIT_CARD,APPROVED,1190
