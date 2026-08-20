@@ -1,5 +1,5 @@
 #pip install --no-cache-dir -r requirements.txt
-pyspark==4.0.1
+pyspark==3.5.1
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pytest==8.4.1
@@ -11,3 +11,4 @@ boto3
 sqlalchemy
 psycopg[binary]
 pymysql
+delta-spark==3.1.0
