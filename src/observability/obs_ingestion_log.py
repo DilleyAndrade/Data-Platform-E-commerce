@@ -3,7 +3,7 @@ from datetime import date
 from schemas.schemas import ingestion_log_schema
 from path_constants.path_constants import BUCKET_OBS
 
-uuid_num = uuid4()
+execution_id =f"ingestion_{ uuid4()}"
 
 def create_ingestion_log_table(
   spark,
@@ -17,11 +17,10 @@ def create_ingestion_log_table(
   execution_status,
   error_message
 ):
-  run_id = f"{source_name}_ingestion_{uuid_num}"
 
   ingestion_log_columns = [
     {
-      "execution_id": run_id,
+      "execution_id": execution_id,
       "source_name": source_name,
       "source_table": source_table,
       "source_type": source_type,
@@ -50,6 +49,6 @@ def create_ingestion_log_table(
 
   spark.sql(f"OPTIMIZE delta.`{s3_path}`")
 
-  spark.sql(f"VACUUM delta.`{s3_path}` RETAIN 168 HOURS")
+  spark.sql(f"VACUUM delta.`{s3_path}` RETAIN 178 HOURS")
  
   return df_ingestion_log
