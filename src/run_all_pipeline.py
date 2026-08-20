@@ -1,9 +1,8 @@
-from ingestion.ingestion_api import ingestion_api
 from ingestion.ingestion_local import ingestion_local
-from ingestion.ingestion_mysql import ingestion_mysql
-from ingestion.ingestion_postgres import ingestion_postgres
+from utils.spark_session import spark_session
 
-# ingestion_api()
-# ingestion_postgres()
-# ingestion_mysql()
-ingestion_local()
+spark = spark_session("ingestion_pipeline", "local[*]")
+
+ingestion_local(spark)
+
+spark.stop()
