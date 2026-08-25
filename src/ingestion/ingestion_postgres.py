@@ -1,11 +1,7 @@
-"""Distributed PostgreSQL ingestion with Spark JDBC."""
-
 import os
 from datetime import date, datetime
 from typing import Any
-
 from dotenv import load_dotenv
-
 from observability.obs_ingestion_log import create_ingestion_log, write_ingestion_log
 from path_constants.path_constants import BUCKET_LAN
 from utils.logger import log
@@ -18,9 +14,7 @@ POSTGRES_TABLES = {
 }
 DEFAULT_JDBC_PARTITIONS = 8
 
-
 def create_postgres_jdbc_config() -> dict[str, str]:
-    """Build the PostgreSQL JDBC settings from environment variables."""
     load_dotenv()
     settings = {
         "host": os.getenv("PG_HOST"),
@@ -58,7 +52,6 @@ def _jdbc_reader(spark, jdbc_config, dbtable):
 
 
 def read_postgres_table(spark, table_name, jdbc_config, num_partitions):
-    """Read a PostgreSQL table in parallel using its numeric key bounds."""
     if table_name not in POSTGRES_TABLES:
         raise ValueError(f"PostgreSQL table is not allowed: {table_name}")
     if num_partitions <= 0:
@@ -99,7 +92,6 @@ def ingestion_postgres(
     ingestion_date: date,
     num_partitions: int = DEFAULT_JDBC_PARTITIONS,
 ) -> list[dict[str, Any]]:
-    """Ingest all configured PostgreSQL tables with Spark."""
     log.info("Started PostgreSQL ingestion.")
     jdbc_config = create_postgres_jdbc_config()
     ingestion_logs = []
