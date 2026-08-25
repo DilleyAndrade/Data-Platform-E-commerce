@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 from functools import reduce
-
 from pyspark.sql import functions as spark_functions
-
 from observability.obs_landing_quality_log import write_landing_quality_log
 from path_constants.path_constants import BUCKET_LAN, BUCKET_QUA, BUCKET_RAW
 from utils.logger import log
@@ -23,6 +21,15 @@ LANDING_DATASETS = {
     "inventory": {"source_name": "mysql", "file_name": "inventory.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
     "order_items": {"source_name": "mysql", "file_name": "order_items.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
     "orders": {"source_name": "mysql", "file_name": "orders.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
+}
+
+PARTITIONED_DATASETS = {
+    "customers",
+    "products",
+    "suppliers",
+    "inventory",
+    "order_items",
+    "orders",
 }
 
 
@@ -75,20 +82,52 @@ def _read_spark_dataframe(spark, file_path, file_format):
     raise ValueError(f"Unsupported file format: {file_format}")
 
 
-def _move_landing_object(s3_client, key, destination_bucket):
-    s3_client.copy(
-        {"Bucket": BUCKET_LAN, "Key": key},
-        destination_bucket,
-        key,
-        Config=S3_TRANSFER_CONFIG,
-    )
-    s3_client.delete_object(Bucket=BUCKET_LAN, Key=key)
-    return f"s3://{destination_bucket}/{key}"
+def _list_prefix_objects(s3_client, prefix):
+    keys = []
+    continuation_token = None
+
+    while True:
+        request = {"Bucket": BUCKET_LAN, "Prefix": prefix}
+        if continuation_token is not None:
+            request["ContinuationToken"] = continuation_token
+        response = s3_client.list_objects_v2(**request)
+        keys.extend(item["Key"] for item in response.get("Contents", []))
+
+        if not response.get("IsTruncated"):
+            return keys
+        continuation_token = response["NextContinuationToken"]
+
+
+def _find_landing_objects(s3_client, dataset, key_or_prefix):
+    if dataset in PARTITIONED_DATASETS:
+        keys = _list_prefix_objects(s3_client, key_or_prefix)
+        if not any(key.endswith(".parquet") for key in keys):
+            raise FileNotFoundError(
+                f"No Parquet parts found under landing/{key_or_prefix}"
+            )
+        return keys
+
+    s3_client.head_object(Bucket=BUCKET_LAN, Key=key_or_prefix)
+    return [key_or_prefix]
+
+
+def _move_landing_objects(s3_client, keys, destination_bucket):
+    for key in keys:
+        s3_client.copy(
+            {"Bucket": BUCKET_LAN, "Key": key},
+            destination_bucket,
+            key,
+            Config=S3_TRANSFER_CONFIG,
+        )
+
+    for key in keys:
+        s3_client.delete_object(Bucket=BUCKET_LAN, Key=key)
 
 
 def _route_validated_object(
     s3_client,
-    key,
+    keys,
+    destination_key,
     config,
     run_id,
     dataset_validations,
@@ -100,16 +139,20 @@ def _route_validated_object(
     )
     destination_bucket = BUCKET_QUA if has_quality_failure else BUCKET_RAW
     check_name = "route_to_quarantine" if has_quality_failure else "route_to_raw"
-    destination_path = f"s3://{destination_bucket}/{key}"
+    destination_path = f"s3://{destination_bucket}/{destination_key}"
 
     try:
-        _move_landing_object(s3_client, key, destination_bucket)
+        _move_landing_objects(s3_client, keys, destination_bucket)
         status = "PASS"
         error_message = None
     except Exception as error:
         status = "FAIL"
         error_message = f"{type(error).__name__}: {error}"
-        log.exception("Failed to move %s to %s.", key, destination_bucket)
+        log.exception(
+            "Failed to move %s to %s.",
+            destination_key,
+            destination_bucket,
+        )
 
     return _quality_event(
         run_id,
@@ -137,12 +180,21 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
 
     for dataset, config in LANDING_DATASETS.items():
         dataset_validation_start = len(validations)
-        key = f"{dataset}/ingestion_date_{partition}/{config['file_name']}"
-        landing_path = f"s3://{BUCKET_LAN}/{key}"
-        spark_path = f"s3a://{BUCKET_LAN}/{key}"
+        directory = f"{dataset}/ingestion_date_{partition}/"
+        key_or_prefix = (
+            directory
+            if dataset in PARTITIONED_DATASETS
+            else f"{directory}{config['file_name']}"
+        )
+        landing_path = f"s3://{BUCKET_LAN}/{key_or_prefix}"
+        spark_path = f"s3a://{BUCKET_LAN}/{key_or_prefix}"
 
         try:
-            s3_client.head_object(Bucket=BUCKET_LAN, Key=key)
+            object_keys = _find_landing_objects(
+                s3_client,
+                dataset,
+                key_or_prefix,
+            )
             validations.append(
                 _quality_event(
                     run_id,
@@ -197,7 +249,8 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
             validations.append(
                 _route_validated_object(
                     s3_client,
-                    key,
+                    object_keys,
+                    key_or_prefix,
                     config,
                     run_id,
                     validations[dataset_validation_start:],
@@ -294,7 +347,8 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
         validations.append(
             _route_validated_object(
                 s3_client,
-                key,
+                object_keys,
+                key_or_prefix,
                 config,
                 run_id,
                 validations[dataset_validation_start:],
