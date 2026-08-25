@@ -1,7 +1,10 @@
 import os
 import boto3
 from utils.logger import log
+from dotenv import load_dotenv
 from botocore.exceptions import EndpointConnectionError, ClientError
+
+load_dotenv()
 
 def get_s3_client():
     endpoint = os.getenv("AWS_ENDPOINT_URL")
