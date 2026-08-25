@@ -1,20 +1,35 @@
+from datetime import date
+from uuid import uuid4
+from data_quality.dq_landing_raw import dq_landing_raw
 from ingestion.ingestion_api import ingestion_api
 from ingestion.ingestion_local import ingestion_local
 from ingestion.ingestion_mysql import ingestion_mysql
 from ingestion.ingestion_postgres import ingestion_postgres
+from utils.s3_client import get_s3_client
 from utils.spark_session import spark_session
 
-spark = spark_session("ingestion_pipeline", "local[*]")
 
-ingestion_local(spark)
-ingestion_postgres(spark)
-ingestion_mysql(spark)
-ingestion_api(spark)
+def run_pipeline(run_id: str, ingestion_date: date) -> None:
+    
+    spark = spark_session("ingestion_pipeline", "local[*]")
+    s3_client = get_s3_client()
+
+    if s3_client is None:
+        spark.stop()
+        raise ConnectionError("Could not create the S3/MinIO client.")
+
+    try:
+        ingestion_local(spark, run_id, ingestion_date, s3_client)
+        ingestion_postgres(spark, run_id, ingestion_date)
+        ingestion_mysql(spark, run_id, ingestion_date)
+        ingestion_api(spark, run_id, ingestion_date, s3_client)
+        dq_landing_raw(spark, run_id, ingestion_date, s3_client)
+    finally:
+        spark.stop()
 
 
-s3_path = f"s3a://observability/ingestion_log"
-
-df_log = spark.read.format("delta").load(s3_path)
-df_log.show(100)
-
-spark.stop()
+if __name__ == "__main__":
+    run_pipeline(
+        run_id=f"ingestion_{uuid4()}",
+        ingestion_date=date.today(),
+    )
