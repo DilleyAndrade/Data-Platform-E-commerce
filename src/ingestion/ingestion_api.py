@@ -1,101 +1,140 @@
-import io
-import gc
-import requests
-from observability.obs_ingestion_log import create_ingestion_log_table
-from utils.logger import log
-import pandas as pd
-from dotenv import load_dotenv
-from path_constants.path_constants import URL_CUSTOMER_REVIEW, URL_EXCHANGE_RATES, URL_MARKETING_CAMPAIGNS
 from datetime import date, datetime
-from path_constants.path_constants import BUCKET_LAN
+from typing import Any
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from observability.obs_ingestion_log import create_ingestion_log, write_ingestion_log
+from path_constants.path_constants import (
+    BUCKET_LAN,
+    URL_CUSTOMER_REVIEW,
+    URL_EXCHANGE_RATES,
+    URL_MARKETING_CAMPAIGNS,
+)
+from utils.logger import log
+from utils.s3_transfer import S3_TRANSFER_CONFIG
 
-from utils.s3_client import get_s3_client
+CONNECT_TIMEOUT_SECONDS = 10
+READ_TIMEOUT_SECONDS = 120
+HTTP_RETRY_ATTEMPTS = 3
 
-load_dotenv()
+API_SOURCES = (
+    (URL_CUSTOMER_REVIEW, "customer_review"),
+    (URL_EXCHANGE_RATES, "exchange_rates"),
+    (URL_MARKETING_CAMPAIGNS, "marketing_campaigns"),
+)
 
-urls = [
-    [URL_CUSTOMER_REVIEW, "customer_review"], 
-    [URL_EXCHANGE_RATES, "exchange_rates"], 
-    [URL_MARKETING_CAMPAIGNS, "marketing_campaigns"]
-]
+# prepara um cliente HTTP reutilizável para consultar as APIs com tratamento automático de falhas temporárias.
+# Uma Session reaproveita conexões HTTP. Em vez de abrir uma nova conexão para cada endpoint, ela pode reutilizar a conexão existente, reduzindo tempo e custo de rede.
+def create_http_session() -> requests.Session:
+    retry = Retry(
+        total=HTTP_RETRY_ATTEMPTS,
+        connect=HTTP_RETRY_ATTEMPTS,
+        read=HTTP_RETRY_ATTEMPTS,
+        status=HTTP_RETRY_ATTEMPTS,
+        backoff_factor=1,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        respect_retry_after_header=True,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
-def ingestion_api(spark):
 
-    log.info("Started Api Ingestion.")
-    s3 = get_s3_client()
+def build_landing_location(dataset: str, ingestion_date: date) -> tuple[str, str]:
+    date_partition = ingestion_date.strftime("%Y%m%d")
+    directory = f"{dataset}/ingestion_date_{date_partition}"
+    key = f"{directory}/{dataset}.json"
+    s3_path = f"s3://{BUCKET_LAN}/{directory}/"
+    return key, s3_path
 
-    def save_api_file(api_url, file_name):
-        try:
-            log.info(f"Trying save {file_name} in S3.")
-            
-            ingestion_date = date.today().strftime('%Y%m%d')
-            key = f"{file_name}/ingestion_date_{ingestion_date}/{file_name}.parquet"
+#Transfere os dados de uma API diretamente para o S3/MinIO, sem carregar a resposta inteira na memória.
+def stream_api_to_s3(
+    http_session: requests.Session,
+    s3_client: Any,
+    url: str,
+    dataset: str,
+    ingestion_date: date,
+) -> str:
+    key, s3_path = build_landing_location(dataset, ingestion_date)
+    log.info("Streaming API %s to %s.", url, key)
 
-           #Alguns dados da api chegavam como dict e outros nao, isso faz um tratamento para padronizar os arquivos e todos serem dict []
-            if isinstance(api_url, dict):
-                df = pd.DataFrame([api_url])
-            else:
-                df = pd.DataFrame(api_url)
+    with http_session.get(
+        url,
+        stream=True,
+        timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
+        headers={"Accept": "application/json"},
+    ) as response:
+        response.raise_for_status()
+        response.raw.decode_content = True
+        s3_client.upload_fileobj(
+            response.raw,
+            BUCKET_LAN,
+            key,
+            ExtraArgs={"ContentType": "application/json"},
+            Config=S3_TRANSFER_CONFIG,
+        )
 
-            #O io salva recursos na memoria, usando assim o recurso eh liberado quando salvar o arquivo no minio
-            with io.BytesIO() as buffer:
-                df.to_parquet(buffer, index=False)
-                s3.put_object(
-                    Bucket=BUCKET_LAN,
-                    Key=key,
-                    Body=buffer.getvalue()
+    log.info("Successfully streamed %s to S3.", dataset)
+    return s3_path
+
+
+def ingestion_api(
+    spark: Any,
+    run_id: str,
+    ingestion_date: date,
+    s3_client: Any,
+    http_session: requests.Session | None = None,
+) -> list[dict[str, Any]]:
+    log.info("Started API ingestion.")
+    if s3_client is None:
+        raise ConnectionError("Could not create the S3/MinIO client.")
+
+    owns_session = http_session is None
+    session = http_session if http_session is not None else create_http_session()
+    ingestion_logs: list[dict[str, Any]] = []
+
+    try:
+        for url, dataset in API_SOURCES:
+            started_at = datetime.now()
+            _, s3_path = build_landing_location(dataset, ingestion_date)
+
+            try:
+                s3_path = stream_api_to_s3(
+                    session,
+                    s3_client,
+                    url,
+                    dataset,
+                    ingestion_date,
                 )
-            del df #Apaga as referencias dos dados passados na ram
-            gc.collect() # Forca o Garbage collector a recolher os residuops da memoria
+                status = "SUCCESS"
+                error_message = ""
+            except Exception as error:
+                status = "FAILED"
+                error_message = f"{type(error).__name__}: {error}"
+                log.exception("Failed to ingest API dataset %s from %s.", dataset, url)
 
-            log.info(f"Success to save {file_name} in S3.")
+            ended_at = datetime.now()
+            ingestion_logs.append(
+                create_ingestion_log(
+                    run_id,
+                    "api",
+                    dataset,
+                    "api",
+                    f"{dataset}.json",
+                    s3_path,
+                    started_at,
+                    ended_at,
+                    status,
+                    error_message,
+                )
+            )
+    finally:
+        if owns_session:
+            session.close()
 
-        except Exception as e:
-            log.info(f"Failed to save {file_name} in S3.")
-            log.error(f"ERROR: {e}")
-
-    #Read api
-    def read_api(url):
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            log.info(f"Connected with: {url}")
-            return data
-
-        except requests.exceptions.HTTPError as errh:
-            log.error(f"HTTP error: {errh}")
-        except requests.exceptions.ConnectionError as errc:
-            log.error(f"Conection error: {errc}")
-        except requests.exceptions.Timeout as errt:
-            log.error(f"Timeout exceeded: {errt}")
-        except requests.exceptions.RequestException as err:
-            log.error(f"Unexpected error: {err}")
-
-
-    for url, file_name in urls:
-        started_at = datetime.now()
-        log.info(f"Reading file {file_name}.")
-
-        try:
-            save_api_file(read_api(url), file_name)
-            status = "SUCCESS"
-            error_message = ""
-
-        except Exception as e:
-            status = "FAILED"
-            error_message = f"Error: {e}"
-            log.info(f"Failed to save {file_name} in S3.")
-            log.error(f"ERROR: {e}")
-
-        ended_at =  datetime.now()
-
-        ingestion_date = date.today().strftime('%Y%m%d')
-        s3_path = f"s3://{BUCKET_LAN}/{file_name}/ingestion_date_{ingestion_date}/"
-    
-        log.info(f"Creating ingestion log table for file {file_name}.")
-        create_ingestion_log_table(spark, "api", file_name, "api", file_name, s3_path, started_at, ended_at, status, error_message)
-        log.info(f"Ingestion log table created for {file_name}.")
-
-    log.info("Finished Api Ingestion.")
+    write_ingestion_log(spark, ingestion_logs)
+    log.info("Finished API ingestion.")
+    return ingestion_logs
