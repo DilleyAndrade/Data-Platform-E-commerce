@@ -4,6 +4,8 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pytest==8.4.1
 requests
+urllib3
+httpx
 pandas
 pyarrow
 python-dotenv
@@ -11,4 +13,3 @@ boto3
 sqlalchemy
 psycopg[binary]
 pymysql
-delta-spark==3.1.0
