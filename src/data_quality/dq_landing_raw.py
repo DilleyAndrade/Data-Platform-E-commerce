@@ -274,7 +274,24 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
             )
         )
 
-        missing_columns = sorted(set(config["required_columns"]) - set(dataframe.columns))
+        expected_columns = set(config["required_columns"])
+        actual_columns = set(dataframe.columns)
+        missing_columns = sorted(expected_columns - actual_columns)
+        unexpected_columns = (
+            sorted(actual_columns - expected_columns)
+            if expected_columns
+            else []
+        )
+        schema_errors = []
+        if missing_columns:
+            schema_errors.append(
+                f"Missing required columns: {', '.join(missing_columns)}"
+            )
+        if unexpected_columns:
+            schema_errors.append(
+                f"Unexpected columns: {', '.join(unexpected_columns)}"
+            )
+        has_schema_mismatch = bool(schema_errors)
         validations.append(
             _quality_event(
                 run_id,
@@ -282,16 +299,14 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 landing_path,
                 "required_columns",
                 "schema",
-                "FAIL" if missing_columns else "PASS",
+                "FAIL" if has_schema_mismatch else "PASS",
                 total=total,
-                valid=0 if missing_columns else total,
-                invalid=total if missing_columns else 0,
-                invalid_percentage=100.0 if missing_columns and total else 0.0,
-                error_message=(
-                    f"Missing required columns: {', '.join(missing_columns)}"
-                    if missing_columns
-                    else None
+                valid=0 if has_schema_mismatch else total,
+                invalid=total if has_schema_mismatch else 0,
+                invalid_percentage=(
+                    100.0 if has_schema_mismatch and total else 0.0
                 ),
+                error_message="; ".join(schema_errors) or None,
             )
         )
 
