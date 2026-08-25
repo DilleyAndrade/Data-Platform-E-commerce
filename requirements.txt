@@ -6,10 +6,5 @@ pytest==8.4.1
 requests
 urllib3
 httpx
-pandas
-pyarrow
 python-dotenv
 boto3
-sqlalchemy
-psycopg[binary]
-pymysql
