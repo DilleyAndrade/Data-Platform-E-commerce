@@ -1,4 +1,5 @@
 import os
+from math import ceil
 from datetime import date, datetime
 from typing import Any
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ POSTGRES_TABLES = {
     "suppliers": "supplier_id",
 }
 DEFAULT_JDBC_PARTITIONS = 8
+JDBC_RECORDS_PER_PARTITION = 1_000_000
 
 def create_postgres_jdbc_config() -> dict[str, str]:
     load_dotenv()
@@ -61,19 +63,25 @@ def read_postgres_table(spark, table_name, jdbc_config, num_partitions):
     qualified_table = f"{POSTGRES_SCHEMA}.{table_name}"
     bounds_query = (
         f"(SELECT MIN({partition_column}) AS lower_bound, "
-        f"MAX({partition_column}) AS upper_bound FROM {qualified_table}) AS bounds"
+        f"MAX({partition_column}) AS upper_bound, "
+        f"COUNT(*) AS record_count FROM {qualified_table}) AS bounds"
     )
     bounds = _jdbc_reader(spark, jdbc_config, bounds_query).load().first()
 
     if bounds.lower_bound is None:
         return _jdbc_reader(spark, jdbc_config, qualified_table).load()
 
+    effective_partitions = min(
+        num_partitions,
+        max(1, ceil(bounds.record_count / JDBC_RECORDS_PER_PARTITION)),
+    )
+
     return (
         _jdbc_reader(spark, jdbc_config, qualified_table)
         .option("partitionColumn", partition_column)
         .option("lowerBound", bounds.lower_bound)
         .option("upperBound", bounds.upper_bound)
-        .option("numPartitions", num_partitions)
+        .option("numPartitions", effective_partitions)
         .load()
     )
 
