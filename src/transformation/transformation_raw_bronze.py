@@ -1,9 +1,7 @@
 from datetime import date, datetime, timezone
-
 from pyspark.sql import Window
 from pyspark.sql import functions as spark_functions
 from delta.tables import DeltaTable
-
 from data_quality.dq_landing_raw import LANDING_DATASETS
 from observability.obs_transformation_log import write_transformation_log
 from path_constants.path_constants import BUCKET_BRO, BUCKET_RAW
@@ -12,7 +10,6 @@ from utils.logger import log
 
 
 PIPELINE_NAME = "raw_to_bronze"
-NULL_TEXT_VALUES = ("", "null", "n/a")
 
 
 def _utc_now():
@@ -43,7 +40,7 @@ def _normalized_value(column_name):
         spark_functions.col(column_name).cast("string")
     )
     return spark_functions.when(
-        spark_functions.lower(value_as_text).isin(*NULL_TEXT_VALUES),
+        spark_functions.lower(value_as_text).isin("", "null", "n/a"),
         spark_functions.lit(None),
     ).otherwise(value_as_text)
 
@@ -69,11 +66,11 @@ def _apply_bronze_schema(dataframe, schema):
     for condition in cast_failures[1:]:
         cast_failure_condition = cast_failure_condition | condition
 
-    return dataframe.select(
-        *projected_columns,
-        cast_failure_condition.alias("_cast_failed"),
-        spark_functions.input_file_name().alias("_source_file"),
+    projected_columns.append(cast_failure_condition.alias("_cast_failed"))
+    projected_columns.append(
+        spark_functions.input_file_name().alias("_source_file")
     )
+    return dataframe.select(projected_columns)
 
 
 def _add_bronze_metadata(
@@ -86,7 +83,7 @@ def _add_bronze_metadata(
 ):
     business_columns = [field.name for field in schema.fields]
     duplicate_window = Window.partitionBy(
-        *(spark_functions.col(column) for column in business_columns)
+        spark_functions.struct(business_columns)
     )
     required_null_condition = spark_functions.lit(False)
     for field in config["required_fields"]:
@@ -123,7 +120,10 @@ def _add_bronze_metadata(
         .withColumn("_bronze_processed_at", spark_functions.current_timestamp())
         .withColumn(
             "_record_hash",
-            spark_functions.sha2(spark_functions.concat_ws("||", *hash_values), 256),
+            spark_functions.sha2(
+                spark_functions.concat_ws("||", spark_functions.array(hash_values)),
+                256,
+            ),
         )
         .drop("_cast_failed", "_duplicate_count")
     )

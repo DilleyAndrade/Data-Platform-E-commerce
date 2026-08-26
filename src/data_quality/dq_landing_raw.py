@@ -87,10 +87,17 @@ def _list_prefix_objects(s3_client, prefix):
     continuation_token = None
 
     while True:
-        request = {"Bucket": BUCKET_LAN, "Prefix": prefix}
-        if continuation_token is not None:
-            request["ContinuationToken"] = continuation_token
-        response = s3_client.list_objects_v2(**request)
+        if continuation_token is None:
+            response = s3_client.list_objects_v2(
+                Bucket=BUCKET_LAN,
+                Prefix=prefix,
+            )
+        else:
+            response = s3_client.list_objects_v2(
+                Bucket=BUCKET_LAN,
+                Prefix=prefix,
+                ContinuationToken=continuation_token,
+            )
         keys.extend(item["Key"] for item in response.get("Contents", []))
 
         if not response.get("IsTruncated"):

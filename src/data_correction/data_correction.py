@@ -63,7 +63,7 @@ def _normalize_schema(dataframe, expected_columns):
     if missing:
         corrections.append("ADD_MISSING_COLUMNS")
 
-    return dataframe.select(*expected_columns), corrections
+    return dataframe.select(expected_columns), corrections
 
 
 def _count_still_invalid(dataframe, required_fields):
