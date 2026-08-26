@@ -3,6 +3,8 @@ from uuid import uuid4
 from data_quality.dq_landing_raw import dq_landing_raw
 from data_correction.data_correction import data_correction
 from transformation.transformation_raw_bronze import transformation_raw_bronze
+from transformation.transform_bronze_silver import transform_bronze_silver
+from transformation.transform_silver_gold import transform_silver_gold
 from ingestion.ingestion_api import ingestion_api
 from ingestion.ingestion_local import ingestion_local
 from ingestion.ingestion_mysql import ingestion_mysql
@@ -28,6 +30,8 @@ def run_pipeline(run_id: str, ingestion_date: date) -> None:
         dq_landing_raw(spark, run_id, ingestion_date, s3_client)
         data_correction(spark, f"correction_{run_id}", ingestion_date, s3_client)
         transformation_raw_bronze(spark, run_id, ingestion_date, s3_client)
+        transform_bronze_silver(spark, run_id, ingestion_date)
+        transform_silver_gold(spark, run_id, ingestion_date)
     finally:
         spark.stop()
 
