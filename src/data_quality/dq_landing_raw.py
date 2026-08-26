@@ -15,12 +15,12 @@ LANDING_DATASETS = {
     "customer_review": {"source_name": "api", "file_name": "customer_review.json", "format": "json", "required_columns": ["review_id", "customer_id", "product_id", "rating", "comment"], "required_fields": ["review_id", "customer_id", "product_id"]},
     "exchange_rates": {"source_name": "api", "file_name": "exchange_rates.json", "format": "json", "required_columns": ["date", "usd_brl", "eur_brl"], "required_fields": ["date"]},
     "marketing_campaigns": {"source_name": "api", "file_name": "marketing_campaigns.json", "format": "json", "required_columns": ["campaign_id", "campaign", "channel", "budget"], "required_fields": ["campaign_id"]},
-    "customers": {"source_name": "postgres", "file_name": "customers.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
-    "products": {"source_name": "postgres", "file_name": "products.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
-    "suppliers": {"source_name": "postgres", "file_name": "suppliers.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
-    "inventory": {"source_name": "mysql", "file_name": "inventory.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
-    "order_items": {"source_name": "mysql", "file_name": "order_items.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
-    "orders": {"source_name": "mysql", "file_name": "orders.parquet", "format": "parquet", "required_columns": [], "required_fields": []},
+    "customers": {"source_name": "postgres", "file_name": "customers.parquet", "format": "parquet", "required_columns": ["customer_id", "name", "email", "birth_date", "city", "state", "created_at"], "required_fields": ["customer_id"]},
+    "products": {"source_name": "postgres", "file_name": "products.parquet", "format": "parquet", "required_columns": ["product_id", "name", "category", "price", "supplier_id"], "required_fields": ["product_id", "supplier_id"]},
+    "suppliers": {"source_name": "postgres", "file_name": "suppliers.parquet", "format": "parquet", "required_columns": ["supplier_id", "supplier_name", "city"], "required_fields": ["supplier_id"]},
+    "inventory": {"source_name": "mysql", "file_name": "inventory.parquet", "format": "parquet", "required_columns": ["product_id", "quantity_available", "updated_at"], "required_fields": ["product_id"]},
+    "order_items": {"source_name": "mysql", "file_name": "order_items.parquet", "format": "parquet", "required_columns": ["order_item_id", "order_id", "product_id", "quantity", "unit_price"], "required_fields": ["order_item_id", "order_id", "product_id"]},
+    "orders": {"source_name": "mysql", "file_name": "orders.parquet", "format": "parquet", "required_columns": ["order_id", "customer_id", "order_date", "status"], "required_fields": ["order_id", "customer_id"]},
 }
 
 PARTITIONED_DATASETS = {
@@ -170,6 +170,7 @@ def _route_validated_object(
 
 
 def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
+    log.info("Data quality validation started.")
     if spark is None:
         raise ValueError("A Spark session is required for Landing data quality.")
     if s3_client is None:
@@ -179,6 +180,11 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
     validations = []
 
     for dataset, config in LANDING_DATASETS.items():
+        log.info(
+            "Applying Landing data quality validations: dataset=%s source=%s.",
+            dataset,
+            config["source_name"],
+        )
         dataset_validation_start = len(validations)
         directory = f"{dataset}/ingestion_date_{partition}/"
         key_or_prefix = (
@@ -371,6 +377,20 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
             )
         )
 
+    validation_summaries = {}
+    for validation in validations:
+        identity = (validation["source_name"], validation["file_name"])
+        validation_summaries.setdefault(identity, []).append(
+            f"{validation['check_name']}={validation['check_status']}"
+        )
+    for (source_name, file_name), checks in validation_summaries.items():
+        log.info(
+            "Landing validation results: source=%s file=%s checks=[%s].",
+            source_name,
+            file_name,
+            ", ".join(checks),
+        )
+
     if validations:
         write_landing_quality_log(spark, validations)
 
@@ -384,4 +404,5 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
         len(validations),
         failures,
     )
+    log.info("Data quality validation finished.")
     return validations
