@@ -1,5 +1,6 @@
 from fastapi import FastAPI
-from .data_loader import load_json
+from fastapi.responses import FileResponse
+from .data_loader import resolve_data_file
 
 
 app = FastAPI(
@@ -11,17 +12,23 @@ app = FastAPI(
 
 @app.get("/customer-reviews", tags=["Dados"])
 def get_customer_reviews():
-    #Return client reviews
-    return load_json("dataset/api_customer_reviews.json")
+    return FileResponse(
+        resolve_data_file("dataset/api_customer_reviews.json"),
+        media_type="application/json",
+    )
 
 
 @app.get("/exchange-rates", tags=["Dados"])
 def get_exchange_rates():
-    #Return exchange rates
-    return load_json("dataset/api_exchange_rates.json")
+    return FileResponse(
+        resolve_data_file("dataset/api_exchange_rates.json"),
+        media_type="application/json",
+    )
 
 
 @app.get("/marketing-campaigns", tags=["Dados"])
 def get_marketing_campaigns():
-    #Return marketing campaigns
-    return load_json("dataset/api_marketing_campaigns.json")
+    return FileResponse(
+        resolve_data_file("dataset/api_marketing_campaigns.json"),
+        media_type="application/json",
+    )

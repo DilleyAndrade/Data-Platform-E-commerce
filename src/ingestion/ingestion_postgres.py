@@ -1,66 +1,137 @@
 import os
-import io
-import gc
-import boto3
-import pandas as pd
-from datetime import date
+from datetime import date, datetime
+from typing import Any
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from observability.obs_ingestion_log import create_ingestion_log, write_ingestion_log
+from path_constants.path_constants import BUCKET_LAN
+from utils.logger import log
 
-load_dotenv()
+POSTGRES_SCHEMA = "public"
+POSTGRES_TABLES = {
+    "customers": "customer_id",
+    "products": "product_id",
+    "suppliers": "supplier_id",
+}
+DEFAULT_JDBC_PARTITIONS = 8
 
-PG_HOST = os.getenv("PG_HOST")
-PG_PORT = os.getenv("PG_PORT")
-PG_DB = os.getenv("PG_DB")
-PG_USER = os.getenv("PG_USER")
-PG_PASSWORD = os.getenv("PG_PASSWORD")
-
-tables = ["customers", "products", "suppliers"]
-
-def ingestion_postgres():
-
-  engine = create_engine(f"postgresql+psycopg://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}")
-
-  def get_s3_client():
-    endpoint = os.getenv("AWS_ENDPOINT_URL")
-    return boto3.client(
-        "s3",
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        endpoint_url=endpoint if endpoint else None
-    )
-  
-  s3 = get_s3_client()
-
-
-  def create_dataframe(query):
-    df = pd.read_sql(query, engine)
-
-    print(df.head())
-    return df
-
-
-  def save_postgres_file(data_frame, table_name):
-    try:
-      bucket_name = "landing"
-      key = f"{table_name}/ingestion_date_{date.today().strftime('%Y%m%d')}/{table_name}.parquet"
-
-      with io.BytesIO() as buffer:
-        data_frame.to_parquet(buffer, index=False)
-        s3.put_object(
-            Bucket=bucket_name,
-            Key=key,
-            Body=buffer.getvalue()
+def create_postgres_jdbc_config() -> dict[str, str]:
+    load_dotenv()
+    settings = {
+        "host": os.getenv("PG_HOST"),
+        "port": os.getenv("PG_PORT"),
+        "database": os.getenv("PG_DB"),
+        "user": os.getenv("PG_USER"),
+        "password": os.getenv("PG_PASSWORD"),
+    }
+    missing = [name for name, value in settings.items() if not value]
+    if missing:
+        raise ValueError(
+            "Missing required PostgreSQL settings: " + ", ".join(sorted(missing))
         )
-      del data_frame
-      gc.collect()
+    return {
+        "url": (
+            f"jdbc:postgresql://{settings['host']}:{settings['port']}/"
+            f"{settings['database']}"
+        ),
+        "user": settings["user"],
+        "password": settings["password"],
+        "driver": "org.postgresql.Driver",
+    }
 
-      print(f"File {table_name} saved!")
 
-    except Exception as e:
-        print(f"Error to save file. Error: {e}")
+def _jdbc_reader(spark, jdbc_config, dbtable):
+    return (
+        spark.read.format("jdbc")
+        .option("url", jdbc_config["url"])
+        .option("dbtable", dbtable)
+        .option("user", jdbc_config["user"])
+        .option("password", jdbc_config["password"])
+        .option("driver", jdbc_config["driver"])
+        .option("fetchsize", 10_000)
+    )
 
 
-  for table in tables:
-    query = f"select * from public.{table};"
-    save_postgres_file(create_dataframe(query), table)
+def read_postgres_table(spark, table_name, jdbc_config, num_partitions):
+    if table_name not in POSTGRES_TABLES:
+        raise ValueError(f"PostgreSQL table is not allowed: {table_name}")
+    if num_partitions <= 0:
+        raise ValueError("PostgreSQL JDBC partitions must be greater than zero.")
+
+    partition_column = POSTGRES_TABLES[table_name]
+    qualified_table = f"{POSTGRES_SCHEMA}.{table_name}"
+    bounds_query = (
+        f"(SELECT MIN({partition_column}) AS lower_bound, "
+        f"MAX({partition_column}) AS upper_bound FROM {qualified_table}) AS bounds"
+    )
+    bounds = _jdbc_reader(spark, jdbc_config, bounds_query).load().first()
+
+    if bounds.lower_bound is None:
+        return _jdbc_reader(spark, jdbc_config, qualified_table).load()
+
+    return (
+        _jdbc_reader(spark, jdbc_config, qualified_table)
+        .option("partitionColumn", partition_column)
+        .option("lowerBound", bounds.lower_bound)
+        .option("upperBound", bounds.upper_bound)
+        .option("numPartitions", num_partitions)
+        .load()
+    )
+
+
+def build_landing_location(table_name, ingestion_date):
+    date_partition = ingestion_date.strftime("%Y%m%d")
+    directory = f"{table_name}/ingestion_date_{date_partition}"
+    spark_path = f"s3a://{BUCKET_LAN}/{directory}/"
+    log_path = f"s3://{BUCKET_LAN}/{directory}/"
+    return spark_path, log_path
+
+
+def ingestion_postgres(
+    spark: Any,
+    run_id: str,
+    ingestion_date: date,
+    num_partitions: int = DEFAULT_JDBC_PARTITIONS,
+) -> list[dict[str, Any]]:
+    log.info("Started PostgreSQL ingestion.")
+    jdbc_config = create_postgres_jdbc_config()
+    ingestion_logs = []
+
+    for table_name in POSTGRES_TABLES:
+        started_at = datetime.now()
+        spark_path, log_path = build_landing_location(table_name, ingestion_date)
+        log.info("Reading PostgreSQL table %s.%s with Spark JDBC.", POSTGRES_SCHEMA, table_name)
+
+        try:
+            dataframe = read_postgres_table(
+                spark,
+                table_name,
+                jdbc_config,
+                num_partitions,
+            )
+            dataframe.write.mode("overwrite").parquet(spark_path)
+            status = "SUCCESS"
+            error_message = ""
+        except Exception as error:
+            status = "FAILED"
+            error_message = f"{type(error).__name__}: {error}"
+            log.exception("Failed to ingest PostgreSQL table %s.", table_name)
+
+        ended_at = datetime.now()
+        ingestion_logs.append(
+            create_ingestion_log(
+                run_id,
+                "postgres",
+                table_name,
+                "table",
+                table_name,
+                log_path,
+                started_at,
+                ended_at,
+                status,
+                error_message,
+            )
+        )
+
+    write_ingestion_log(spark, ingestion_logs)
+    log.info("Finished PostgreSQL ingestion.")
+    return ingestion_logs
