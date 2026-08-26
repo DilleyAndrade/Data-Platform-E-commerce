@@ -1,4 +1,5 @@
 import os
+from math import ceil
 from datetime import date, datetime
 from typing import Any
 from dotenv import load_dotenv
@@ -7,11 +8,12 @@ from path_constants.path_constants import BUCKET_LAN
 from utils.logger import log
 
 MYSQL_TABLES = {
-    "inventory": "inventory_id",
+    "inventory": "product_id",
     "order_items": "order_item_id",
     "orders": "order_id",
 }
 DEFAULT_JDBC_PARTITIONS = 8
+JDBC_RECORDS_PER_PARTITION = 1_000_000
 
 
 def create_mysql_jdbc_config() -> dict[str, str]:
@@ -60,19 +62,25 @@ def read_mysql_table(spark, table_name, jdbc_config, num_partitions):
     partition_column = MYSQL_TABLES[table_name]
     bounds_query = (
         f"(SELECT MIN({partition_column}) AS lower_bound, "
-        f"MAX({partition_column}) AS upper_bound FROM {table_name}) AS bounds"
+        f"MAX({partition_column}) AS upper_bound, "
+        f"COUNT(*) AS record_count FROM {table_name}) AS bounds"
     )
     bounds = _jdbc_reader(spark, jdbc_config, bounds_query).load().first()
 
     if bounds.lower_bound is None:
         return _jdbc_reader(spark, jdbc_config, table_name).load()
 
+    effective_partitions = min(
+        num_partitions,
+        max(1, ceil(bounds.record_count / JDBC_RECORDS_PER_PARTITION)),
+    )
+
     return (
         _jdbc_reader(spark, jdbc_config, table_name)
         .option("partitionColumn", partition_column)
         .option("lowerBound", bounds.lower_bound)
         .option("upperBound", bounds.upper_bound)
-        .option("numPartitions", num_partitions)
+        .option("numPartitions", effective_partitions)
         .load()
     )
 
