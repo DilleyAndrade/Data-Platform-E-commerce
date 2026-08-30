@@ -4,8 +4,18 @@ from schemas.schemas import ingestion_log_schema
 from utils.logger import log
 
 
-def create_ingestion_log(run_id, source_name, source_table, source_type, file_name,
-                         target_path, started_at, ended_at, status, error_message):
+def create_ingestion_log(
+    run_id,
+    source_name,
+    source_table,
+    source_type,
+    file_name,
+    target_path,
+    started_at,
+    ended_at,
+    status,
+    error_message,
+):
     return {
         "run_id": run_id,
         "source_name": source_name,

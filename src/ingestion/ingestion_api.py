@@ -23,8 +23,7 @@ API_SOURCES = (
     (URL_MARKETING_CAMPAIGNS, "marketing_campaigns"),
 )
 
-# prepara um cliente HTTP reutilizável para consultar as APIs com tratamento automático de falhas temporárias.
-# Uma Session reaproveita conexões HTTP. Em vez de abrir uma nova conexão para cada endpoint, ela pode reutilizar a conexão existente, reduzindo tempo e custo de rede.
+
 def create_http_session() -> requests.Session:
     retry = Retry(
         total=HTTP_RETRY_ATTEMPTS,
@@ -50,7 +49,7 @@ def build_landing_location(dataset: str, ingestion_date: date) -> tuple[str, str
     s3_path = f"s3://{BUCKET_LAN}/{directory}/"
     return key, s3_path
 
-#Transfere os dados de uma API diretamente para o S3/MinIO, sem carregar a resposta inteira na memória.
+
 def stream_api_to_s3(
     http_session: requests.Session,
     s3_client: Any,
@@ -138,3 +137,16 @@ def ingestion_api(
     write_ingestion_log(spark, ingestion_logs)
     log.info("Finished API ingestion.")
     return ingestion_logs
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark, required_s3_client
+
+    arguments = job_arguments("Ingest API datasets into Landing.")
+    with job_spark("landing_ingestion_api") as spark_session:
+        ingestion_api(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+            required_s3_client(),
+        )

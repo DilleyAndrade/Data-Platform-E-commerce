@@ -4,7 +4,8 @@ from delta.tables import DeltaTable
 from pyspark.sql import functions as spark_functions
 
 from observability.obs_transformation_log import write_transformation_log
-from path_constants.path_constants import BUCKET_GOL, BUCKET_SIL
+from path_constants.path_constants import BUCKET_GOL, BUCKET_OBS, BUCKET_SIL
+from schemas.schemas import gold_validation_failure_schema
 from utils.logger import log
 
 
@@ -126,13 +127,26 @@ def _sales_detail(silver):
         spark_functions.sum("gross_revenue").alias("gross_revenue"),
         spark_functions.avg("gross_revenue").alias("average_item_revenue"),
     )
-    order_totals = sales.groupBy("order_id", "order_date", "customer_id").agg(
+    sales_order_totals = sales.groupBy("order_id", "order_date", "customer_id").agg(
         spark_functions.sum("quantity").alias("units"),
         spark_functions.sum("gross_revenue").alias("order_total"),
         spark_functions.count("order_item_id").alias("line_items"),
     )
+    order_totals = (
+        orders.select(
+            spark_functions.col("orders.order_id").alias("order_id"),
+            spark_functions.col("orders.order_date").alias("order_date"),
+            spark_functions.col("orders.customer_id").alias("customer_id"),
+        )
+        .join(
+            sales_order_totals.select("order_id", "units", "order_total", "line_items"),
+            "order_id",
+            "left",
+        )
+        .fillna({"units": 0, "order_total": 0, "line_items": 0})
+    )
     daily = daily.join(
-        order_totals.groupBy("order_date").agg(
+        sales_order_totals.groupBy("order_date").agg(
             spark_functions.avg("order_total").alias("average_order_value")
         ),
         "order_date",
@@ -206,9 +220,7 @@ def _payments(silver):
             spark_functions.col("payments.amount"),
         )
     )
-    summary = fact.groupBy(
-        "order_date", "payment_method", "payment_status"
-    ).agg(
+    summary = fact.groupBy("order_date", "payment_method", "payment_status").agg(
         spark_functions.count("payment_id").alias("payments"),
         spark_functions.countDistinct("order_id").alias("orders"),
         spark_functions.sum("amount").alias("payment_amount"),
@@ -257,9 +269,7 @@ def _inventory(silver):
         spark_functions.sum("quantity_available").alias("units_available"),
         spark_functions.sum("inventory_value").alias("inventory_value"),
         spark_functions.sum(
-            spark_functions.when(
-                spark_functions.col("is_out_of_stock"), 1
-            ).otherwise(0)
+            spark_functions.when(spark_functions.col("is_out_of_stock"), 1).otherwise(0)
         ).alias("out_of_stock_products"),
     )
     return {"inventory_snapshot": snapshot, "inventory_summary": summary}
@@ -336,9 +346,7 @@ def _customer_experience(silver):
             spark_functions.col("reviews.comment"),
         )
     )
-    review_summary = review_fact.groupBy(
-        "product_id", "product_name", "category"
-    ).agg(
+    review_summary = review_fact.groupBy("product_id", "product_name", "category").agg(
         spark_functions.count("review_id").alias("reviews"),
         spark_functions.avg("rating").alias("average_rating"),
         spark_functions.sum(
@@ -411,30 +419,38 @@ def _business_360(silver):
         "first_order_date",
         "last_order_date",
     )
-    customer_payments = payment_tables["fact_payments"].groupBy("customer_id").agg(
-        spark_functions.count("payment_id").alias("payments"),
-        spark_functions.sum("amount").alias("total_paid"),
-        spark_functions.sum(
-            spark_functions.when(
-                spark_functions.col("payment_status").isin(
-                    "approved", "paid", "completed"
-                ),
-                1,
-            ).otherwise(0)
-        ).alias("successful_payments"),
+    customer_payments = (
+        payment_tables["fact_payments"]
+        .groupBy("customer_id")
+        .agg(
+            spark_functions.count("payment_id").alias("payments"),
+            spark_functions.sum("amount").alias("total_paid"),
+            spark_functions.sum(
+                spark_functions.when(
+                    spark_functions.col("payment_status").isin(
+                        "approved", "paid", "completed"
+                    ),
+                    1,
+                ).otherwise(0)
+            ).alias("successful_payments"),
+        )
     )
-    customer_reviews = experience_tables["fact_reviews"].groupBy(
-        "customer_id"
-    ).agg(
-        spark_functions.count("review_id").alias("reviews"),
-        spark_functions.avg("rating").alias("average_rating"),
+    customer_reviews = (
+        experience_tables["fact_reviews"]
+        .groupBy("customer_id")
+        .agg(
+            spark_functions.count("review_id").alias("reviews"),
+            spark_functions.avg("rating").alias("average_rating"),
+        )
     )
-    customer_events = experience_tables["fact_website_events"].groupBy(
-        "customer_id"
-    ).agg(
-        spark_functions.count("event_id").alias("website_events"),
-        spark_functions.countDistinct("event_date").alias("active_web_days"),
-        spark_functions.max("timestamp").alias("last_web_event_at"),
+    customer_events = (
+        experience_tables["fact_website_events"]
+        .groupBy("customer_id")
+        .agg(
+            spark_functions.count("event_id").alias("website_events"),
+            spark_functions.countDistinct("event_date").alias("active_web_days"),
+            spark_functions.max("timestamp").alias("last_web_event_at"),
+        )
     )
     customer_360 = (
         silver["customers"]
@@ -514,8 +530,17 @@ def _business_360(silver):
         )
     )
 
-    sales_kpis = sales_tables["fact_sales"].agg(
+    order_kpis = silver["orders"].agg(
         spark_functions.countDistinct("order_id").alias("total_orders"),
+        spark_functions.countDistinct(
+            spark_functions.when(
+                spark_functions.col("status").isin("cancelled", "canceled"),
+                spark_functions.col("order_id"),
+            )
+        ).alias("cancelled_orders"),
+    )
+    sales_kpis = sales_tables["fact_sales"].agg(
+        spark_functions.countDistinct("order_id").alias("total_sales_orders"),
         spark_functions.countDistinct("customer_id").alias("buying_customers"),
         spark_functions.sum("quantity").alias("units_sold"),
         spark_functions.sum("gross_revenue").alias("gross_revenue"),
@@ -527,9 +552,7 @@ def _business_360(silver):
     inventory_kpis = inventory_tables["inventory_snapshot"].agg(
         spark_functions.sum("inventory_value").alias("inventory_value"),
         spark_functions.sum(
-            spark_functions.when(
-                spark_functions.col("is_out_of_stock"), 1
-            ).otherwise(0)
+            spark_functions.when(spark_functions.col("is_out_of_stock"), 1).otherwise(0)
         ).alias("out_of_stock_products"),
     )
     experience_kpis = experience_tables["fact_reviews"].agg(
@@ -537,7 +560,8 @@ def _business_360(silver):
         spark_functions.count("review_id").alias("total_reviews"),
     )
     executive_kpis = (
-        sales_kpis.crossJoin(payment_kpis)
+        order_kpis.crossJoin(sales_kpis)
+        .crossJoin(payment_kpis)
         .crossJoin(inventory_kpis)
         .crossJoin(experience_kpis)
     )
@@ -638,7 +662,13 @@ NONNEGATIVE_KPIS = {
     "marketing_budget_by_channel": ["campaigns", "total_budget"],
     "customer_360": ["orders", "units_purchased", "lifetime_value"],
     "product_360": ["orders", "units_sold", "gross_revenue"],
-    "executive_kpis": ["total_orders", "units_sold", "gross_revenue"],
+    "executive_kpis": [
+        "total_orders",
+        "total_sales_orders",
+        "cancelled_orders",
+        "units_sold",
+        "gross_revenue",
+    ],
 }
 
 SOURCE_VOLUME_CHECKS = {
@@ -685,7 +715,8 @@ def _validate_structure(table, dataframe):
         if dataframe.filter(null_condition).limit(1).count():
             errors.append(f"NULL_GRAIN:{table}:{','.join(grain)}")
         duplicate_count = (
-            dataframe.groupBy(grain).count()
+            dataframe.groupBy(grain)
+            .count()
             .filter(spark_functions.col("count") > 1)
             .limit(1)
             .count()
@@ -770,9 +801,7 @@ def _validate_finance_reconciliation(silver, tables):
             f"PAYMENT_RECONCILIATION:silver={silver_amount}:gold={fact_amount}"
         )
     if fact_amount != daily_amount:
-        errors.append(
-            f"PAYMENT_AGGREGATION:fact={fact_amount}:daily={daily_amount}"
-        )
+        errors.append(f"PAYMENT_AGGREGATION:fact={fact_amount}:daily={daily_amount}")
     return errors
 
 
@@ -794,12 +823,32 @@ def _validate_kpi_thresholds(silver, tables):
             errors.append("KPI_THRESHOLD:out_of_stock_above_products")
     if "executive_kpis" in tables:
         kpis = tables["executive_kpis"].first()
-        expected_orders = silver["orders"].count()
+        expected_orders = silver["orders"].select("order_id").distinct().count()
+        expected_sales_orders = (
+            silver["order_items"].select("order_id").distinct().count()
+        )
+        expected_cancelled_orders = (
+            silver["orders"]
+            .filter(spark_functions.col("status").isin("cancelled", "canceled"))
+            .select("order_id")
+            .distinct()
+            .count()
+        )
         expected_revenue = _sum_value(silver["order_items"], "line_total")
         if kpis["total_orders"] != expected_orders:
             errors.append(
                 f"KPI_CORRECTNESS:total_orders={kpis['total_orders']}:"
                 f"silver_orders={expected_orders}"
+            )
+        if kpis["total_sales_orders"] != expected_sales_orders:
+            errors.append(
+                f"KPI_CORRECTNESS:total_sales_orders={kpis['total_sales_orders']}:"
+                f"fact_sales_orders={expected_sales_orders}"
+            )
+        if kpis["cancelled_orders"] != expected_cancelled_orders:
+            errors.append(
+                f"KPI_CORRECTNESS:cancelled_orders={kpis['cancelled_orders']}:"
+                f"silver_cancelled_orders={expected_cancelled_orders}"
             )
         if (kpis["gross_revenue"] or 0) != expected_revenue:
             errors.append(
@@ -818,6 +867,52 @@ def _validate_datamart(silver, tables):
     errors.extend(_validate_finance_reconciliation(silver, tables))
     errors.extend(_validate_kpi_thresholds(silver, tables))
     return errors
+
+
+def _gold_validation_failure_events(
+    run_id,
+    datamart,
+    tables,
+    validation_errors,
+    execution_date,
+):
+    execution_ts = _utc_now()
+    candidate_tables = ",".join(sorted(tables))
+    return [
+        {
+            "run_id": run_id,
+            "datamart": datamart,
+            "validation_type": error.split(":", 1)[0],
+            "validation_error": error,
+            "candidate_tables": candidate_tables,
+            "validation_status": "FAIL",
+            "execution_ts": execution_ts,
+            "execution_date": execution_date,
+        }
+        for error in validation_errors
+    ]
+
+
+def _write_gold_validation_failures(spark, events):
+    if not events:
+        return None
+    target_path = f"s3a://{BUCKET_OBS}/gold_validation_failures"
+    log.info(
+        "Writing Gold validation failures: events=%s path=%s.",
+        len(events),
+        target_path,
+    )
+    dataframe = spark.createDataFrame(
+        events,
+        schema=gold_validation_failure_schema,
+    )
+    dataframe.write.format("delta").mode("append").save(target_path)
+    log.info(
+        "Gold validation failures written: events=%s path=%s.",
+        len(events),
+        target_path,
+    )
+    return dataframe
 
 
 def _detect_anomalies(spark, datamart, tables):
@@ -854,9 +949,12 @@ def _write_gold_table(dataframe, target_path, run_id, execution_date):
         .save(target_path)
     )
     published = spark_functions.col("_gold_run_id") == run_id
-    published_records = output.sparkSession.read.format("delta").load(
-        target_path
-    ).filter(published).count()
+    published_records = (
+        output.sparkSession.read.format("delta")
+        .load(target_path)
+        .filter(published)
+        .count()
+    )
     if published_records != records:
         output.unpersist()
         raise ValueError(
@@ -899,9 +997,7 @@ def _transformation_event(
         "records_updated": 0,
         "records_deleted": 0,
         "data_quality_status": (
-            "FAIL" if status == "FAILED"
-            else "WARNING" if error_message
-            else "PASS"
+            "FAIL" if status == "FAILED" else "WARNING" if error_message else "PASS"
         ),
         "processing_start_ts": started_at,
         "processing_end_ts": ended_at,
@@ -914,7 +1010,9 @@ def _transformation_event(
 
 def transform_silver_gold(spark, run_id, execution_date):
     if spark is None:
-        raise ValueError("A Spark session is required for Silver to Gold transformation.")
+        raise ValueError(
+            "A Spark session is required for Silver to Gold transformation."
+        )
     if not isinstance(execution_date, date):
         raise TypeError("execution_date must be a date.")
 
@@ -931,9 +1029,7 @@ def transform_silver_gold(spark, run_id, execution_date):
             try:
                 for dataset in required:
                     if dataset not in silver_cache:
-                        silver_cache[dataset] = _read_silver(
-                            spark, dataset
-                        ).cache()
+                        silver_cache[dataset] = _read_silver(spark, dataset).cache()
                         silver_counts[dataset] = silver_cache[dataset].count()
                     silver[dataset] = silver_cache[dataset]
                     records_input += silver_counts[dataset]
@@ -945,6 +1041,16 @@ def transform_silver_gold(spark, run_id, execution_date):
                 }
                 validation_errors = _validate_datamart(silver, tables)
                 if validation_errors:
+                    _write_gold_validation_failures(
+                        spark,
+                        _gold_validation_failure_events(
+                            run_id,
+                            datamart,
+                            tables,
+                            validation_errors,
+                            execution_date,
+                        ),
+                    )
                     raise ValueError(" | ".join(validation_errors))
                 anomaly_warnings = _detect_anomalies(spark, datamart, tables)
                 for table, dataframe in tables.items():
@@ -1007,3 +1113,15 @@ def transform_silver_gold(spark, run_id, execution_date):
 
     write_transformation_log(spark, events)
     return events
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark
+
+    arguments = job_arguments("Transform Silver data into Gold.")
+    with job_spark("silver_to_gold") as spark_session:
+        transform_silver_gold(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+        )

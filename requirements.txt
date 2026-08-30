@@ -1,11 +1,10 @@
-#pip install --no-cache-dir -r requirements.txt
 pyspark==3.5.1
 delta-spark==3.1.0
 fastapi==0.116.1
+prometheus-fastapi-instrumentator==7.1.0
 uvicorn[standard]==0.35.0
-pytest==8.4.1
 requests
 urllib3
-httpx
 python-dotenv
 boto3
+prometheus-client

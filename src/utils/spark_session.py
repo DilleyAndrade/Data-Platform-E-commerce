@@ -10,6 +10,8 @@ SPARK_PACKAGES = ",".join(
         "org.postgresql:postgresql:42.7.3",
     )
 )
+
+
 def spark_session(app_name: str, master_mode: str):
     warehouse_directory = os.getenv(
         "SPARK_WAREHOUSE_DIR",
@@ -17,8 +19,7 @@ def spark_session(app_name: str, master_mode: str):
     )
 
     spark = (
-        SparkSession.builder
-        .appName(app_name)
+        SparkSession.builder.appName(app_name)
         .master(master_mode)
         .config(
             "spark.jars.packages",
@@ -30,14 +31,28 @@ def spark_session(app_name: str, master_mode: str):
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
         .config("spark.sql.warehouse.dir", warehouse_directory)
+        .config(
+            "spark.sql.shuffle.partitions",
+            os.getenv("SPARK_SHUFFLE_PARTITIONS", "4"),
+        )
+        .config(
+            "spark.default.parallelism",
+            os.getenv("SPARK_DEFAULT_PARALLELISM", "4"),
+        )
         .config("spark.hadoop.fs.s3a.endpoint", os.getenv("AWS_ENDPOINT_URL"))
         .config("spark.hadoop.fs.s3a.access.key", os.getenv("AWS_ACCESS_KEY_ID"))
         .config("spark.hadoop.fs.s3a.secret.key", os.getenv("AWS_SECRET_ACCESS_KEY"))
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.ssl.channel.mode", "default_jsse")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.databricks.delta.optimizeWrite.enabled", "true")
-        .config("spark.databricks.delta.autoCompact.enabled", "true")
+        .config(
+            "spark.databricks.delta.optimizeWrite.enabled",
+            os.getenv("SPARK_DELTA_OPTIMIZE_WRITE", "false"),
+        )
+        .config(
+            "spark.databricks.delta.autoCompact.enabled",
+            os.getenv("SPARK_DELTA_AUTO_COMPACT", "false"),
+        )
         .config(
             "spark.databricks.delta.autoCompact.maxFileSize",
             str(128 * 1024 * 1024),
@@ -57,5 +72,4 @@ def _suppress_windows_temp_cleanup_warning(spark):
         level = spark.sparkContext._jvm.org.apache.logging.log4j.Level
         log_manager.getLogger("org.apache.spark.SparkEnv").setLevel(level.ERROR)
     except Exception:
-        # A configuracao do logger nao deve impedir a criacao da sessao Spark.
         return

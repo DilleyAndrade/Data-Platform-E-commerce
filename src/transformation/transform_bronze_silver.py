@@ -13,8 +13,6 @@ from utils.logger import log
 
 PIPELINE_NAME = "bronze_to_silver"
 
-# Os pais aparecem antes dos filhos para que as FKs possam ser verificadas
-# contra o estado mais recente da Silver durante a mesma execução.
 SILVER_DATASETS = (
     "customers",
     "suppliers",
@@ -77,17 +75,41 @@ LOWERCASE_COLUMNS = {
 
 VALID_STATUS_VALUES = {
     "orders": {
-        "pending", "approved", "paid", "processing", "shipped",
-        "delivered", "completed", "cancelled", "canceled", "refunded",
+        "pending",
+        "approved",
+        "paid",
+        "processing",
+        "shipped",
+        "delivered",
+        "completed",
+        "cancelled",
+        "canceled",
+        "refunded",
     },
     "delivery_tracking": {
-        "pending", "processing", "shipped", "in_transit", "in transit",
-        "out_for_delivery", "out for delivery", "delivered", "failed",
-        "returned", "cancelled", "canceled",
+        "pending",
+        "processing",
+        "shipped",
+        "in_transit",
+        "in transit",
+        "out_for_delivery",
+        "out for delivery",
+        "delivered",
+        "failed",
+        "returned",
+        "cancelled",
+        "canceled",
     },
     "payments": {
-        "pending", "approved", "paid", "completed", "declined",
-        "failed", "refunded", "cancelled", "canceled",
+        "pending",
+        "approved",
+        "paid",
+        "completed",
+        "declined",
+        "failed",
+        "refunded",
+        "cancelled",
+        "canceled",
     },
 }
 
@@ -114,7 +136,8 @@ def _read_incremental_bronze(spark, path, run_id, execution_date):
     if not _delta_exists(spark, path):
         return None
     return (
-        spark.read.format("delta").load(path)
+        spark.read.format("delta")
+        .load(path)
         .filter(spark_functions.col("_bronze_run_id") == run_id)
         .filter(spark_functions.col("_ingestion_date") == execution_date)
     )
@@ -136,10 +159,9 @@ def _add_calculated_fields(dataframe, dataset, execution_date):
     if dataset == "order_items":
         return dataframe.withColumn(
             "line_total",
-            (
-                spark_functions.col("quantity")
-                * spark_functions.col("unit_price")
-            ).cast("decimal(18,2)"),
+            (spark_functions.col("quantity") * spark_functions.col("unit_price")).cast(
+                "decimal(18,2)"
+            ),
         )
     if dataset == "coupons":
         return dataframe.withColumn(
@@ -192,8 +214,7 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
                 ),
                 (spark_functions.col("discount") > 100, "DISCOUNT_ABOVE_100"),
                 (
-                    spark_functions.col("end_date")
-                    < spark_functions.col("start_date"),
+                    spark_functions.col("end_date") < spark_functions.col("start_date"),
                     "INVALID_DATE_RANGE",
                 ),
             ]
@@ -270,9 +291,7 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
         populated = spark_functions.col(field.name).isNotNull()
         if isinstance(field.dataType, StringType):
             populated = populated & (spark_functions.col(field.name) != "")
-        populated_fields.append(
-            spark_functions.when(populated, 1).otherwise(0)
-        )
+        populated_fields.append(spark_functions.when(populated, 1).otherwise(0))
     populated_count = populated_fields[0]
     for populated in populated_fields[1:]:
         populated_count = populated_count + populated
@@ -333,15 +352,15 @@ def _apply_foreign_key_rules(spark, dataframe, dataset):
             continue
 
         parent_keys = (
-            spark.read.format("delta").load(parent_path)
+            spark.read.format("delta")
+            .load(parent_path)
             .select(spark_functions.col(parent_column).alias("__fk_value"))
             .distinct()
             .withColumn("__fk_exists", spark_functions.lit(True))
         )
         dataframe = dataframe.join(
             parent_keys,
-            spark_functions.col(child_column)
-            == spark_functions.col("__fk_value"),
+            spark_functions.col(child_column) == spark_functions.col("__fk_value"),
             "left",
         )
         dataframe = dataframe.withColumn(
@@ -363,7 +382,8 @@ def _apply_cross_table_rules(spark, dataframe, dataset):
     if not _delta_exists(spark, orders_path):
         return dataframe
     order_dates = (
-        spark.read.format("delta").load(orders_path)
+        spark.read.format("delta")
+        .load(orders_path)
         .select(
             spark_functions.col("order_id").alias("__date_order_id"),
             spark_functions.col("order_date").alias("__order_date"),
@@ -371,16 +391,14 @@ def _apply_cross_table_rules(spark, dataframe, dataset):
     )
     dataframe = dataframe.join(
         order_dates,
-        spark_functions.col("order_id")
-        == spark_functions.col("__date_order_id"),
+        spark_functions.col("order_id") == spark_functions.col("__date_order_id"),
         "left",
     )
     dataframe = dataframe.withColumn(
         "_reject_reason",
         _append_reason(
             spark_functions.col("_reject_reason"),
-            spark_functions.col("updated_at")
-            < spark_functions.col("__order_date"),
+            spark_functions.col("updated_at") < spark_functions.col("__order_date"),
             "DELIVERY_BEFORE_ORDER_DATE",
         ),
     )
@@ -393,7 +411,9 @@ def _consolidate_cdc(dataframe, dataset):
         spark_functions.col("_record_occurrence").desc(),
     )
     return (
-        dataframe.withColumn("__cdc_position", spark_functions.row_number().over(window))
+        dataframe.withColumn(
+            "__cdc_position", spark_functions.row_number().over(window)
+        )
         .filter(spark_functions.col("__cdc_position") == 1)
         .drop("__cdc_position")
     )
@@ -425,11 +445,15 @@ def _silver_columns(dataframe, dataset, run_id):
         .withColumn("_silver_run_id", spark_functions.lit(run_id))
         .withColumn("_silver_processed_at", spark_functions.current_timestamp())
     )
-    selected_columns = business_columns + source_metadata + [
-        "_silver_record_hash",
-        "_silver_run_id",
-        "_silver_processed_at",
-    ]
+    selected_columns = (
+        business_columns
+        + source_metadata
+        + [
+            "_silver_record_hash",
+            "_silver_run_id",
+            "_silver_processed_at",
+        ]
+    )
     return dataframe.select(selected_columns)
 
 
@@ -444,7 +468,9 @@ def _count_upsert_changes(spark, dataframe, dataset, target_path):
         key_match = spark_functions.col(f"source.{key}") == spark_functions.col(
             f"target.{key}"
         )
-        join_condition = key_match if join_condition is None else join_condition & key_match
+        join_condition = (
+            key_match if join_condition is None else join_condition & key_match
+        )
 
     comparison = dataframe.alias("source").join(
         target.alias("target"),
@@ -470,18 +496,14 @@ def _merge_silver(spark, dataframe, dataset, target_path):
         dataframe.write.format("delta").mode("overwrite").save(target_path)
         return
 
-    merge_parts = [
-        f"target.{key} = source.{key}" for key in PRIMARY_KEYS[dataset]
-    ]
+    merge_parts = [f"target.{key} = source.{key}" for key in PRIMARY_KEYS[dataset]]
     merge_condition = " AND ".join(merge_parts)
     (
         DeltaTable.forPath(spark, target_path)
         .alias("target")
         .merge(dataframe.alias("source"), merge_condition)
         .whenMatchedUpdateAll(
-            condition=(
-                "target._silver_record_hash <> source._silver_record_hash"
-            )
+            condition=("target._silver_record_hash <> source._silver_record_hash")
         )
         .whenNotMatchedInsertAll()
         .execute()
@@ -489,7 +511,7 @@ def _merge_silver(spark, dataframe, dataset, target_path):
 
 
 def _write_rejected(spark, dataframe, dataset, run_id, execution_date):
-    target_path = f"s3a://{BUCKET_REJ}/silver/{dataset}"
+    target_path = f"s3a://{BUCKET_REJ}/bronze_to_silver/{dataset}"
     reject_hash_columns = [spark_functions.col(column) for column in dataframe.columns]
     rejected = (
         dataframe.withColumn(
@@ -499,7 +521,7 @@ def _write_rejected(spark, dataframe, dataset, run_id, execution_date):
                 256,
             ),
         )
-        .withColumn("_reject_stage", spark_functions.lit("silver"))
+        .withColumn("_reject_stage", spark_functions.lit("bronze_to_silver"))
         .withColumn("_reject_run_id", spark_functions.lit(run_id))
         .withColumn("_rejected_at", spark_functions.current_timestamp())
         .withColumn("_reject_execution_date", spark_functions.lit(execution_date))
@@ -602,7 +624,9 @@ def _transformation_event(
 
 def transform_bronze_silver(spark, run_id, execution_date):
     if spark is None:
-        raise ValueError("A Spark session is required for Bronze to Silver transformation.")
+        raise ValueError(
+            "A Spark session is required for Bronze to Silver transformation."
+        )
     if not isinstance(execution_date, date):
         raise TypeError("execution_date must be a date.")
 
@@ -639,9 +663,7 @@ def transform_bronze_silver(spark, run_id, execution_date):
                 "_reject_reason",
                 spark_functions.lit("BRONZE_RECORD_INVALID"),
             )
-            candidates = bronze.filter(
-                spark_functions.col("_record_status") == "VALID"
-            )
+            candidates = bronze.filter(spark_functions.col("_record_status") == "VALID")
             candidates = _standardize(candidates, dataset)
             candidates = _add_calculated_fields(candidates, dataset, execution_date)
             candidates = _apply_row_quality_rules(
@@ -661,9 +683,7 @@ def transform_bronze_silver(spark, run_id, execution_date):
             )
             accepted = candidates.filter(
                 spark_functions.col("_reject_reason") == ""
-            ).filter(
-                spark_functions.col("_quarantine_reason") == ""
-            )
+            ).filter(spark_functions.col("_quarantine_reason") == "")
             accepted = _consolidate_cdc(accepted, dataset)
             accepted = _silver_columns(accepted, dataset, run_id).cache()
 
@@ -672,9 +692,7 @@ def transform_bronze_silver(spark, run_id, execution_date):
             silver_rejected_count = silver_rejected.count()
             records_quarantined = silver_quarantined.count()
             records_rejected = (
-                bronze_rejected_count
-                + silver_rejected_count
-                + records_quarantined
+                bronze_rejected_count + silver_rejected_count + records_quarantined
             )
             if bronze_rejected_count + silver_rejected_count:
                 rejected = bronze_rejected.unionByName(
@@ -751,3 +769,15 @@ def transform_bronze_silver(spark, run_id, execution_date):
 
     write_transformation_log(spark, events)
     return events
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark
+
+    arguments = job_arguments("Transform Bronze data into Silver.")
+    with job_spark("bronze_to_silver") as spark_session:
+        transform_bronze_silver(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+        )
