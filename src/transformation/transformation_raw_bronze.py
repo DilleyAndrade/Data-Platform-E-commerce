@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+import os
 from pyspark.sql import Window
 from pyspark.sql import functions as spark_functions
 from delta.tables import DeltaTable
@@ -50,9 +51,7 @@ def _apply_bronze_schema(dataframe, schema):
         field.name for field in schema.fields if field.name not in dataframe.columns
     ]
     if missing_columns:
-        raise ValueError(
-            "Missing Raw columns: " + ", ".join(sorted(missing_columns))
-        )
+        raise ValueError("Missing Raw columns: " + ", ".join(sorted(missing_columns)))
 
     cast_failures = []
     projected_columns = []
@@ -67,9 +66,7 @@ def _apply_bronze_schema(dataframe, schema):
         cast_failure_condition = cast_failure_condition | condition
 
     projected_columns.append(cast_failure_condition.alias("_cast_failed"))
-    projected_columns.append(
-        spark_functions.input_file_name().alias("_source_file")
-    )
+    projected_columns.append(spark_functions.input_file_name().alias("_source_file"))
     return dataframe.select(projected_columns)
 
 
@@ -82,9 +79,7 @@ def _add_bronze_metadata(
     source_path,
 ):
     business_columns = [field.name for field in schema.fields]
-    duplicate_window = Window.partitionBy(
-        spark_functions.struct(business_columns)
-    )
+    duplicate_window = Window.partitionBy(spark_functions.struct(business_columns))
     required_null_condition = spark_functions.lit(False)
     for field in config["required_fields"]:
         required_null_condition = (
@@ -108,8 +103,7 @@ def _add_bronze_metadata(
         for column in business_columns
     ]
     dataframe = (
-        dataframe
-        .withColumn(
+        dataframe.withColumn(
             "_record_status",
             spark_functions.when(invalid_condition, "INVALID").otherwise("VALID"),
         )
@@ -139,11 +133,13 @@ def _add_bronze_metadata(
 
 def _write_new_unpartitioned_table(dataframe, target_path):
     (
-        dataframe.write
-        .format("delta")
+        dataframe.write.format("delta")
         .mode("overwrite")
         .option("mergeSchema", "false")
-        .option("optimizeWrite", "true")
+        .option(
+            "optimizeWrite",
+            os.getenv("SPARK_DELTA_OPTIMIZE_WRITE", "false"),
+        )
         .save(target_path)
     )
 
@@ -164,12 +160,14 @@ def _write_bronze_delta(spark, dataframe, target_path, execution_date):
             partition_columns,
         )
         (
-            dataframe.write
-            .format("delta")
+            dataframe.write.format("delta")
             .mode("overwrite")
             .option("replaceWhere", f"_ingestion_date = DATE '{partition}'")
             .option("mergeSchema", "false")
-            .option("optimizeWrite", "true")
+            .option(
+                "optimizeWrite",
+                os.getenv("SPARK_DELTA_OPTIMIZE_WRITE", "false"),
+            )
             .partitionBy("_ingestion_date")
             .save(target_path)
         )
@@ -233,9 +231,13 @@ def _transformation_event(
 
 def transformation_raw_bronze(spark, run_id, execution_date, s3_client):
     if spark is None:
-        raise ValueError("A Spark session is required for Raw to Bronze transformation.")
+        raise ValueError(
+            "A Spark session is required for Raw to Bronze transformation."
+        )
     if s3_client is None:
-        raise ConnectionError("Could not create the S3/MinIO client for transformation.")
+        raise ConnectionError(
+            "Could not create the S3/MinIO client for transformation."
+        )
     if not isinstance(execution_date, date):
         raise TypeError("execution_date must be a date.")
 
@@ -332,3 +334,16 @@ def transformation_raw_bronze(spark, run_id, execution_date, s3_client):
 
     write_transformation_log(spark, events)
     return events
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark, required_s3_client
+
+    arguments = job_arguments("Transform Raw data into Bronze.")
+    with job_spark("raw_to_bronze") as spark_session:
+        transformation_raw_bronze(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+            required_s3_client(),
+        )
