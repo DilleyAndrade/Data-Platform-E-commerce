@@ -1,12 +1,13 @@
-#urls
-URL_CUSTOMER_REVIEW =     "http://localhost:8000/customer-reviews"
-URL_EXCHANGE_RATES =      "http://localhost:8000/exchange-rates"
-URL_MARKETING_CAMPAIGNS = "http://localhost:8000/marketing-campaigns"
+import os
+from pathlib import Path
 
-#local files
-PATH_LOCAL_FILES = "C:/Users/dille/OneDrive/Desktop/data-platform/local_data_source"
 
-#buckets
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+URL_CUSTOMER_REVIEW = f"{API_BASE_URL}/customer-reviews"
+URL_EXCHANGE_RATES = f"{API_BASE_URL}/exchange-rates"
+URL_MARKETING_CAMPAIGNS = f"{API_BASE_URL}/marketing-campaigns"
+
+PATH_LOCAL_FILES = Path(os.getenv("LOCAL_DATA_PATH", "local_data_source"))
 
 BUCKET_LAN = "landing"
 BUCKET_RAW = "raw"
