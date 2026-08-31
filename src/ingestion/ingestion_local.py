@@ -9,6 +9,7 @@ from utils.s3_transfer import S3_TRANSFER_CONFIG
 
 SUPPORTED_FILE_FORMATS = {".csv", ".json"}
 
+
 def discover_local_files(source_directory: Path) -> list[Path]:
     if not source_directory.exists():
         raise FileNotFoundError(f"Source directory does not exist: {source_directory}")
@@ -107,3 +108,16 @@ def ingestion_local(
     write_ingestion_log(spark, ingestion_logs)
     log.info("Finished local ingestion.")
     return ingestion_logs
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark, required_s3_client
+
+    arguments = job_arguments("Ingest local files into Landing.")
+    with job_spark("landing_ingestion_local") as spark_session:
+        ingestion_local(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+            required_s3_client(),
+        )
