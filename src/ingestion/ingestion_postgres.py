@@ -16,6 +16,7 @@ POSTGRES_TABLES = {
 DEFAULT_JDBC_PARTITIONS = 8
 JDBC_RECORDS_PER_PARTITION = 1_000_000
 
+
 def create_postgres_jdbc_config() -> dict[str, str]:
     load_dotenv()
     settings = {
@@ -107,7 +108,11 @@ def ingestion_postgres(
     for table_name in POSTGRES_TABLES:
         started_at = datetime.now()
         spark_path, log_path = build_landing_location(table_name, ingestion_date)
-        log.info("Reading PostgreSQL table %s.%s with Spark JDBC.", POSTGRES_SCHEMA, table_name)
+        log.info(
+            "Reading PostgreSQL table %s.%s with Spark JDBC.",
+            POSTGRES_SCHEMA,
+            table_name,
+        )
 
         try:
             dataframe = read_postgres_table(
@@ -143,3 +148,15 @@ def ingestion_postgres(
     write_ingestion_log(spark, ingestion_logs)
     log.info("Finished PostgreSQL ingestion.")
     return ingestion_logs
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark
+
+    arguments = job_arguments("Ingest PostgreSQL tables into Landing.")
+    with job_spark("landing_ingestion_postgres") as spark_session:
+        ingestion_postgres(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+        )

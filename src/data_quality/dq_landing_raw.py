@@ -8,19 +8,123 @@ from utils.s3_transfer import S3_TRANSFER_CONFIG
 
 
 LANDING_DATASETS = {
-    "coupons": {"source_name": "local", "file_name": "coupons.csv", "format": "csv", "required_columns": ["coupon", "discount", "start_date", "end_date"], "required_fields": ["coupon"]},
-    "delivery_tracking": {"source_name": "local", "file_name": "delivery_tracking.csv", "format": "csv", "required_columns": ["tracking_id", "order_id", "status", "updated_at"], "required_fields": ["tracking_id", "order_id"]},
-    "payments": {"source_name": "local", "file_name": "payments.csv", "format": "csv", "required_columns": ["payment_id", "order_id", "payment_method", "payment_status", "amount"], "required_fields": ["payment_id", "order_id"]},
-    "website_events": {"source_name": "local", "file_name": "website_events.json", "format": "json", "required_columns": ["event_id", "customer_id", "event", "page", "timestamp"], "required_fields": ["event_id", "customer_id"]},
-    "customer_review": {"source_name": "api", "file_name": "customer_review.json", "format": "json", "required_columns": ["review_id", "customer_id", "product_id", "rating", "comment"], "required_fields": ["review_id", "customer_id", "product_id"]},
-    "exchange_rates": {"source_name": "api", "file_name": "exchange_rates.json", "format": "json", "required_columns": ["date", "usd_brl", "eur_brl"], "required_fields": ["date"]},
-    "marketing_campaigns": {"source_name": "api", "file_name": "marketing_campaigns.json", "format": "json", "required_columns": ["campaign_id", "campaign", "channel", "budget"], "required_fields": ["campaign_id"]},
-    "customers": {"source_name": "postgres", "file_name": "customers.parquet", "format": "parquet", "required_columns": ["customer_id", "name", "email", "birth_date", "city", "state", "created_at"], "required_fields": ["customer_id"]},
-    "products": {"source_name": "postgres", "file_name": "products.parquet", "format": "parquet", "required_columns": ["product_id", "name", "category", "price", "supplier_id"], "required_fields": ["product_id", "supplier_id"]},
-    "suppliers": {"source_name": "postgres", "file_name": "suppliers.parquet", "format": "parquet", "required_columns": ["supplier_id", "supplier_name", "city"], "required_fields": ["supplier_id"]},
-    "inventory": {"source_name": "mysql", "file_name": "inventory.parquet", "format": "parquet", "required_columns": ["product_id", "quantity_available", "updated_at"], "required_fields": ["product_id"]},
-    "order_items": {"source_name": "mysql", "file_name": "order_items.parquet", "format": "parquet", "required_columns": ["order_item_id", "order_id", "product_id", "quantity", "unit_price"], "required_fields": ["order_item_id", "order_id", "product_id"]},
-    "orders": {"source_name": "mysql", "file_name": "orders.parquet", "format": "parquet", "required_columns": ["order_id", "customer_id", "order_date", "status"], "required_fields": ["order_id", "customer_id"]},
+    "coupons": {
+        "source_name": "local",
+        "file_name": "coupons.csv",
+        "format": "csv",
+        "required_columns": ["coupon", "discount", "start_date", "end_date"],
+        "required_fields": ["coupon"],
+    },
+    "delivery_tracking": {
+        "source_name": "local",
+        "file_name": "delivery_tracking.csv",
+        "format": "csv",
+        "required_columns": ["tracking_id", "order_id", "status", "updated_at"],
+        "required_fields": ["tracking_id", "order_id"],
+    },
+    "payments": {
+        "source_name": "local",
+        "file_name": "payments.csv",
+        "format": "csv",
+        "required_columns": [
+            "payment_id",
+            "order_id",
+            "payment_method",
+            "payment_status",
+            "amount",
+        ],
+        "required_fields": ["payment_id", "order_id"],
+    },
+    "website_events": {
+        "source_name": "local",
+        "file_name": "website_events.json",
+        "format": "json",
+        "required_columns": ["event_id", "customer_id", "event", "page", "timestamp"],
+        "required_fields": ["event_id", "customer_id"],
+    },
+    "customer_review": {
+        "source_name": "api",
+        "file_name": "customer_review.json",
+        "format": "json",
+        "required_columns": [
+            "review_id",
+            "customer_id",
+            "product_id",
+            "rating",
+            "comment",
+        ],
+        "required_fields": ["review_id", "customer_id", "product_id"],
+    },
+    "exchange_rates": {
+        "source_name": "api",
+        "file_name": "exchange_rates.json",
+        "format": "json",
+        "required_columns": ["date", "usd_brl", "eur_brl"],
+        "required_fields": ["date"],
+    },
+    "marketing_campaigns": {
+        "source_name": "api",
+        "file_name": "marketing_campaigns.json",
+        "format": "json",
+        "required_columns": ["campaign_id", "campaign", "channel", "budget"],
+        "required_fields": ["campaign_id"],
+    },
+    "customers": {
+        "source_name": "postgres",
+        "file_name": "customers.parquet",
+        "format": "parquet",
+        "required_columns": [
+            "customer_id",
+            "name",
+            "email",
+            "birth_date",
+            "city",
+            "state",
+            "created_at",
+        ],
+        "required_fields": ["customer_id"],
+    },
+    "products": {
+        "source_name": "postgres",
+        "file_name": "products.parquet",
+        "format": "parquet",
+        "required_columns": ["product_id", "name", "category", "price", "supplier_id"],
+        "required_fields": ["product_id", "supplier_id"],
+    },
+    "suppliers": {
+        "source_name": "postgres",
+        "file_name": "suppliers.parquet",
+        "format": "parquet",
+        "required_columns": ["supplier_id", "supplier_name", "city"],
+        "required_fields": ["supplier_id"],
+    },
+    "inventory": {
+        "source_name": "mysql",
+        "file_name": "inventory.parquet",
+        "format": "parquet",
+        "required_columns": ["product_id", "quantity_available", "updated_at"],
+        "required_fields": ["product_id"],
+    },
+    "order_items": {
+        "source_name": "mysql",
+        "file_name": "order_items.parquet",
+        "format": "parquet",
+        "required_columns": [
+            "order_item_id",
+            "order_id",
+            "product_id",
+            "quantity",
+            "unit_price",
+        ],
+        "required_fields": ["order_item_id", "order_id", "product_id"],
+    },
+    "orders": {
+        "source_name": "mysql",
+        "file_name": "orders.parquet",
+        "format": "parquet",
+        "required_columns": ["order_id", "customer_id", "order_date", "status"],
+        "required_fields": ["order_id", "customer_id"],
+    },
 }
 
 PARTITIONED_DATASETS = {
@@ -70,10 +174,7 @@ def _quality_event(
 def _read_spark_dataframe(spark, file_path, file_format):
     if file_format == "csv":
         return (
-            spark.read
-            .option("header", True)
-            .option("inferSchema", True)
-            .csv(file_path)
+            spark.read.option("header", True).option("inferSchema", True).csv(file_path)
         )
     if file_format == "json":
         return spark.read.option("multiLine", True).json(file_path)
@@ -87,10 +188,17 @@ def _list_prefix_objects(s3_client, prefix):
     continuation_token = None
 
     while True:
-        request = {"Bucket": BUCKET_LAN, "Prefix": prefix}
-        if continuation_token is not None:
-            request["ContinuationToken"] = continuation_token
-        response = s3_client.list_objects_v2(**request)
+        if continuation_token is None:
+            response = s3_client.list_objects_v2(
+                Bucket=BUCKET_LAN,
+                Prefix=prefix,
+            )
+        else:
+            response = s3_client.list_objects_v2(
+                Bucket=BUCKET_LAN,
+                Prefix=prefix,
+                ContinuationToken=continuation_token,
+            )
         keys.extend(item["Key"] for item in response.get("Contents", []))
 
         if not response.get("IsTruncated"):
@@ -134,8 +242,7 @@ def _route_validated_object(
     records_total,
 ):
     has_quality_failure = any(
-        validation["check_status"] == "FAIL"
-        for validation in dataset_validations
+        validation["check_status"] == "FAIL" for validation in dataset_validations
     )
     destination_bucket = BUCKET_QUA if has_quality_failure else BUCKET_RAW
     check_name = "route_to_quarantine" if has_quality_failure else "route_to_raw"
@@ -284,9 +391,7 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
         actual_columns = set(dataframe.columns)
         missing_columns = sorted(expected_columns - actual_columns)
         unexpected_columns = (
-            sorted(actual_columns - expected_columns)
-            if expected_columns
-            else []
+            sorted(actual_columns - expected_columns) if expected_columns else []
         )
         schema_errors = []
         if missing_columns:
@@ -294,9 +399,7 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 f"Missing required columns: {', '.join(missing_columns)}"
             )
         if unexpected_columns:
-            schema_errors.append(
-                f"Unexpected columns: {', '.join(unexpected_columns)}"
-            )
+            schema_errors.append(f"Unexpected columns: {', '.join(unexpected_columns)}")
         has_schema_mismatch = bool(schema_errors)
         validations.append(
             _quality_event(
@@ -309,9 +412,7 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 total=total,
                 valid=0 if has_schema_mismatch else total,
                 invalid=total if has_schema_mismatch else 0,
-                invalid_percentage=(
-                    100.0 if has_schema_mismatch and total else 0.0
-                ),
+                invalid_percentage=(100.0 if has_schema_mismatch and total else 0.0),
                 error_message="; ".join(schema_errors) or None,
             )
         )
@@ -360,9 +461,7 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 invalid_percentage=(
                     round(duplicates / total * 100, 2) if total else 0.0
                 ),
-                error_message=(
-                    "Duplicate records were found." if duplicates else None
-                ),
+                error_message=("Duplicate records were found." if duplicates else None),
             )
         )
         validations.append(
@@ -394,10 +493,7 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
     if validations:
         write_landing_quality_log(spark, validations)
 
-    failures = sum(
-        validation["check_status"] == "FAIL"
-        for validation in validations
-    )
+    failures = sum(validation["check_status"] == "FAIL" for validation in validations)
     log.info(
         "Landing data quality finished: run_id=%s, checks=%s, failures=%s.",
         run_id,
@@ -406,3 +502,16 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
     )
     log.info("Data quality validation finished.")
     return validations
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark, required_s3_client
+
+    arguments = job_arguments("Validate Landing data and route it to Raw.")
+    with job_spark("landing_to_raw") as spark_session:
+        dq_landing_raw(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+            required_s3_client(),
+        )

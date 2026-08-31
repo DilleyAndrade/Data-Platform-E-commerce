@@ -18,7 +18,6 @@ def _list_quarantine_objects(s3_client):
         if continuation_token is None:
             response = s3_client.list_objects_v2(Bucket=BUCKET_QUA)
         else:
-            # O token indica de onde continuar quando existem muitos arquivos.
             response = s3_client.list_objects_v2(
                 Bucket=BUCKET_QUA,
                 ContinuationToken=continuation_token,
@@ -63,7 +62,7 @@ def _normalize_schema(dataframe, expected_columns):
     if missing:
         corrections.append("ADD_MISSING_COLUMNS")
 
-    return dataframe.select(*expected_columns), corrections
+    return dataframe.select(expected_columns), corrections
 
 
 def _count_still_invalid(dataframe, required_fields):
@@ -72,7 +71,9 @@ def _count_still_invalid(dataframe, required_fields):
         condition = None
         for field in required_fields:
             field_is_null = spark_functions.col(field).isNull()
-            condition = field_is_null if condition is None else condition | field_is_null
+            condition = (
+                field_is_null if condition is None else condition | field_is_null
+            )
         invalid_nulls = dataframe.filter(condition).count()
 
     total = dataframe.count()
@@ -173,7 +174,9 @@ def data_correction(spark, correction_run_id, execution_date, s3_client):
     if spark is None:
         raise ValueError("A Spark session is required for data correction.")
     if s3_client is None:
-        raise ConnectionError("Could not create the S3/MinIO client for data correction.")
+        raise ConnectionError(
+            "Could not create the S3/MinIO client for data correction."
+        )
     if not isinstance(execution_date, date):
         raise TypeError("execution_date must be a date.")
 
@@ -271,3 +274,16 @@ def data_correction(spark, correction_run_id, execution_date, s3_client):
     write_data_correction_log(spark, events)
     log.info("Data correction finished.")
     return events
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark, required_s3_client
+
+    arguments = job_arguments("Correct quarantined records.")
+    with job_spark("data_correction") as spark_session:
+        data_correction(
+            spark_session,
+            f"correction_{arguments.run_id}",
+            arguments.execution_date,
+            required_s3_client(),
+        )
