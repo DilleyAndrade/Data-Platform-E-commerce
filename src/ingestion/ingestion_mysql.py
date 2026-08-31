@@ -142,3 +142,15 @@ def ingestion_mysql(
     write_ingestion_log(spark, ingestion_logs)
     log.info("Finished MySQL ingestion.")
     return ingestion_logs
+
+
+if __name__ == "__main__":
+    from utils.job import job_arguments, job_spark
+
+    arguments = job_arguments("Ingest MySQL tables into Landing.")
+    with job_spark("landing_ingestion_mysql") as spark_session:
+        ingestion_mysql(
+            spark_session,
+            arguments.run_id,
+            arguments.execution_date,
+        )
