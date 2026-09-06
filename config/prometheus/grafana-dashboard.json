@@ -1,0 +1,243 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Last Run Status",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_last_status{job=\"data_platform_pipeline\"}", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "FALHA", "color": "red"}, "1": {"text": "SUCESSO", "color": "green"}}}], "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Pipeline Runs",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(data_pipeline_last_completion_timestamp_seconds{job=\"data_platform_pipeline\"}[$__range])", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Failed Runs",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(data_pipeline_last_failure_timestamp_seconds{job=\"data_platform_pipeline\"}[$__range])", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Pipeline Success Rate",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * changes(data_pipeline_last_success_timestamp_seconds{job=\"data_platform_pipeline\"}[$__range]) / clamp_min(changes(data_pipeline_last_completion_timestamp_seconds{job=\"data_platform_pipeline\"}[$__range]), 1)", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 95}, {"color": "green", "value": 99}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 5, "type": "stat", "title": "Average Pipeline Duration",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "avg_over_time(data_pipeline_last_duration_seconds{job=\"data_platform_pipeline\"}[$__range])", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 6, "type": "stat", "title": "Data Quality Rate",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * data_pipeline_quality_ratio{job=\"data_platform_pipeline\"}", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 95}, {"color": "green", "value": 98}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 7, "type": "stat", "title": "Gold Records Produced",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(data_pipeline_records_output{job=\"data_platform_pipeline\",stage=\"gold\"})", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 8, "type": "stat", "title": "Time Since Last Run",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "time() - data_pipeline_last_completion_timestamp_seconds{job=\"data_platform_pipeline\"}", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 9, "type": "stat", "title": "Invalid or Rejected Records",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_quality_records_invalid{job=\"data_platform_pipeline\"}", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 10, "type": "stat", "title": "Failures by Stage",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(data_pipeline_stage_failures{job=\"data_platform_pipeline\"})", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Pipeline Duration Over Time",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_last_duration_seconds{job=\"data_platform_pipeline\"}", "legendFormat": "pipeline", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 12, "type": "barchart", "title": "Duration by Stage",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_stage_duration_seconds{job=\"data_platform_pipeline\"}", "instant": true, "legendFormat": "{{stage}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "Records by Stage",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "data_pipeline_records_input{job=\"data_platform_pipeline\"}", "legendFormat": "entrada {{stage}}", "refId": "A"},
+        {"expr": "data_pipeline_records_output{job=\"data_platform_pipeline\"}", "legendFormat": "saida {{stage}}", "refId": "B"},
+        {"expr": "data_pipeline_records_rejected{job=\"data_platform_pipeline\"}", "legendFormat": "rejeitados {{stage}}", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+    },
+    {
+      "id": 14, "type": "barchart", "title": "Failed Data Quality Checks",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_quality_checks_failed{job=\"data_platform_pipeline\"}", "instant": true, "legendFormat": "{{check_type}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 15, "type": "stat", "title": "Last Successful Run",
+      "description": "Data e hora da última execução concluída com sucesso.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_last_success_timestamp_seconds{job=\"data_platform_pipeline\"} * 1000", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "dateTimeAsIso"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 16, "type": "stat", "title": "Last Failed Run",
+      "description": "Data e hora da última execução que terminou com falha.",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_last_failure_timestamp_seconds{job=\"data_platform_pipeline\"} * 1000", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "dateTimeAsIso", "color": {"mode": "fixedColor", "fixedColor": "red"}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 17, "type": "statetimeline", "title": "Execution Status Over Time",
+      "description": "Histórico do último estado publicado: 1 representa sucesso e 0 representa falha.",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_last_status{job=\"data_platform_pipeline\"}", "legendFormat": "Pipeline", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "FAILED", "color": "red"}, "1": {"text": "SUCCESS", "color": "green"}}}]}, "overrides": []},
+      "options": {"alignValue": "left", "mergeValues": true, "showValue": "auto", "legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 18, "type": "gauge", "title": "Rejected Records Rate",
+      "description": "Percentual de registros rejeitados em relação às entradas contabilizadas nas etapas.",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 28},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * sum(data_pipeline_records_rejected{job=\"data_platform_pipeline\"}) / clamp_min(sum(data_pipeline_records_input{job=\"data_platform_pipeline\"}), 1)", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 2}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true}
+    },
+    {
+      "id": 19, "type": "barchart", "title": "Input vs Output by Stage",
+      "description": "Compara os volumes de entrada e saída da execução mais recente em cada etapa.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "data_pipeline_records_input{job=\"data_platform_pipeline\"}", "instant": true, "legendFormat": "Input {{stage}}", "refId": "A"},
+        {"expr": "data_pipeline_records_output{job=\"data_platform_pipeline\"}", "instant": true, "legendFormat": "Output {{stage}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "orientation": "auto", "showValue": "auto", "stacking": "none"}
+    },
+    {
+      "id": 20, "type": "stat", "title": "Stage Bottleneck",
+      "description": "Mostra a maior duração observada entre as etapas da última execução.",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "topk(1, data_pipeline_stage_duration_seconds{job=\"data_platform_pipeline\"})", "instant": true, "legendFormat": "{{stage}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 21, "type": "stat", "title": "Pipeline SLA Status",
+      "description": "Indica se a última duração ultrapassou PIPELINE_SLA_SECONDS.",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "data_pipeline_duration_sla_violation{job=\"data_platform_pipeline\"}", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "WITHIN SLA", "color": "green"}, "1": {"text": "SLA VIOLATED", "color": "red"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 22, "type": "timeseries", "title": "API Request Rate",
+      "description": "Taxa de requisições por segundo, separada por endpoint e sem incluir o scrape de /metrics.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 43},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (handler) (rate(http_requests_total{job=\"data-platform-api\",handler!=\"/metrics\"}[5m]))", "legendFormat": "{{handler}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+    },
+    {
+      "id": 23, "type": "timeseries", "title": "API Error Rate",
+      "description": "Taxa de respostas HTTP 4xx e 5xx por endpoint.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 43},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (handler, status) (rate(http_requests_total{job=\"data-platform-api\",status=~\"4xx|5xx\"}[5m]))", "legendFormat": "{{handler}} {{status}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+    },
+    {
+      "id": 24, "type": "timeseries", "title": "API Average Request Duration",
+      "description": "Latência média das requisições por endpoint durante uma janela de cinco minutos.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 51},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (handler) (rate(http_request_duration_seconds_sum{job=\"data-platform-api\",handler!=\"/metrics\"}[5m])) / clamp_min(sum by (handler) (rate(http_request_duration_seconds_count{job=\"data-platform-api\",handler!=\"/metrics\"}[5m])), 0.000001)", "legendFormat": "{{handler}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+    },
+    {
+      "id": 25, "type": "barchart", "title": "API Requests by Endpoint",
+      "description": "Quantidade de requisições recebidas por endpoint no período selecionado.",
+      "gridPos": {"h": 8, "w": 8, "x": 12, "y": 51},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (handler) (increase(http_requests_total{job=\"data-platform-api\",handler!=\"/metrics\"}[$__range]))", "instant": true, "legendFormat": "{{handler}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "showValue": "always"}
+    },
+    {
+      "id": 26, "type": "stat", "title": "Active Pipeline Alerts",
+      "description": "Quantidade de regras DataPipeline atualmente no estado firing.",
+      "gridPos": {"h": 8, "w": 4, "x": 20, "y": 51},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(ALERTS{alertstate=\"firing\",alertname=~\"DataPipeline.*\"}) or vector(0)", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 41,
+  "tags": ["data-platform", "prometheus"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "Data Platform - Pipeline Overview",
+  "uid": "data-platform-overview",
+  "version": 2
+}
