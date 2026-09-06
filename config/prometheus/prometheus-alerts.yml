@@ -1,0 +1,52 @@
+groups:
+  - name: data-platform-pipeline
+    interval: 15s
+    rules:
+      - alert: DataPipelineLastRunFailed
+        expr: data_pipeline_last_status{job="data_platform_pipeline"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The latest data pipeline run failed"
+          description: "A última execução publicada pelo pipeline terminou com falha."
+
+      - alert: DataPipelineFreshnessExceeded
+        expr: time() - data_pipeline_last_completion_timestamp_seconds{job="data_platform_pipeline"} > 90000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The data pipeline has not completed within 25 hours"
+          description: "O pipeline não publica uma conclusão há mais de 25 horas."
+
+      - alert: DataPipelineDurationSlaViolated
+        expr: data_pipeline_duration_sla_violation{job="data_platform_pipeline"} == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The data pipeline duration exceeded its SLA"
+          description: "A duração da última execução ultrapassou o limite configurado."
+
+      - alert: DataPipelineQualityBelowTarget
+        expr: data_pipeline_quality_ratio{job="data_platform_pipeline"} < 0.98
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data quality is below 98 percent"
+          description: "A proporção de registros aceitos na Silver ficou abaixo da meta."
+
+      - alert: DataPipelineRejectedRateHigh
+        expr: >-
+          sum(data_pipeline_records_rejected{job="data_platform_pipeline"})
+          /
+          clamp_min(sum(data_pipeline_records_input{job="data_platform_pipeline"}), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rejected record rate is above 5 percent"
+          description: "Mais de 5% dos registros contabilizados nas etapas foram rejeitados."
