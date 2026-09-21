@@ -7,7 +7,11 @@ from pyspark.sql.types import StringType
 
 from observability.obs_transformation_log import write_transformation_log
 from path_constants.path_constants import BUCKET_BRO, BUCKET_QUA, BUCKET_REJ, BUCKET_SIL
-from schemas.schemas import BRONZE_DATASET_SCHEMAS
+from schemas.schemas import (
+    BRONZE_DATASET_SCHEMAS,
+    DATASET_PRIMARY_KEYS,
+    DATASET_REQUIRED_FIELDS,
+)
 from utils.logger import log
 
 
@@ -18,99 +22,83 @@ SILVER_DATASETS = (
     "suppliers",
     "products",
     "inventory",
+    "coupons",
     "orders",
     "order_items",
     "delivery_tracking",
     "payments",
     "website_events",
     "customer_review",
-    "coupons",
     "exchange_rates",
     "marketing_campaigns",
 )
 
-PRIMARY_KEYS = {
-    "customers": ["customer_id"],
-    "suppliers": ["supplier_id"],
-    "products": ["product_id"],
-    "inventory": ["product_id"],
-    "orders": ["order_id"],
-    "order_items": ["order_item_id"],
-    "delivery_tracking": ["tracking_id"],
-    "payments": ["payment_id"],
-    "website_events": ["event_id"],
-    "customer_review": ["review_id"],
-    "coupons": ["coupon"],
-    "exchange_rates": ["date"],
-    "marketing_campaigns": ["campaign_id"],
-}
+PRIMARY_KEYS = DATASET_PRIMARY_KEYS
 
 FOREIGN_KEYS = {
     "products": [("supplier_id", "suppliers", "supplier_id")],
     "inventory": [("product_id", "products", "product_id")],
-    "orders": [("customer_id", "customers", "customer_id")],
+    "orders": [
+        ("customer_id", "customers", "customer_id"),
+        ("coupon_code", "coupons", "coupon"),
+    ],
     "order_items": [
         ("order_id", "orders", "order_id"),
         ("product_id", "products", "product_id"),
     ],
     "delivery_tracking": [("order_id", "orders", "order_id")],
     "payments": [("order_id", "orders", "order_id")],
-    "website_events": [("customer_id", "customers", "customer_id")],
+    "website_events": [
+        ("customer_id", "customers", "customer_id"),
+        ("product_id", "products", "product_id"),
+        ("order_id", "orders", "order_id"),
+    ],
     "customer_review": [
         ("customer_id", "customers", "customer_id"),
         ("product_id", "products", "product_id"),
+        ("order_id", "orders", "order_id"),
     ],
 }
 
 LOWERCASE_COLUMNS = {
-    "customers": ["email", "city", "state"],
-    "suppliers": ["city"],
-    "products": ["category"],
+    "customers": ["email", "city", "state", "customer_type", "status"],
+    "suppliers": ["city", "state"],
+    "products": ["category", "subcategory", "brand"],
     "orders": ["status"],
     "delivery_tracking": ["status"],
     "payments": ["payment_method", "payment_status"],
     "website_events": ["event", "page"],
-    "marketing_campaigns": ["channel"],
+    "marketing_campaigns": ["channel", "status"],
 }
 
 VALID_STATUS_VALUES = {
     "orders": {
         "pending",
-        "approved",
         "paid",
-        "processing",
         "shipped",
         "delivered",
-        "completed",
         "cancelled",
-        "canceled",
         "refunded",
     },
     "delivery_tracking": {
-        "pending",
-        "processing",
+        "created",
         "shipped",
         "in_transit",
-        "in transit",
         "out_for_delivery",
-        "out for delivery",
         "delivered",
         "failed",
         "returned",
-        "cancelled",
-        "canceled",
     },
     "payments": {
         "pending",
+        "authorized",
         "approved",
-        "paid",
-        "completed",
         "declined",
-        "failed",
+        "partially_refunded",
         "refunded",
         "cancelled",
-        "canceled",
     },
+    "customers": {"active", "inactive", "blocked"},
 }
 
 OUTLIER_LIMITS = {
@@ -156,29 +144,20 @@ def _standardize(dataframe, dataset):
 
 
 def _add_calculated_fields(dataframe, dataset, execution_date):
-    if dataset == "order_items":
-        return dataframe.withColumn(
-            "line_total",
-            (spark_functions.col("quantity") * spark_functions.col("unit_price")).cast(
-                "decimal(18,2)"
-            ),
-        )
-    if dataset == "coupons":
-        return dataframe.withColumn(
-            "is_active",
-            (spark_functions.col("start_date") <= spark_functions.lit(execution_date))
-            & (spark_functions.col("end_date") >= spark_functions.lit(execution_date)),
-        )
+    # Values that are now part of the source contract must be preserved. Their
+    # formulas and consistency are checked below instead of being overwritten.
     return dataframe
 
 
 def _append_reason(current_reason, condition, reason):
-    reason_text = spark_functions.lit(reason)
-    combined_reason = spark_functions.when(
-        spark_functions.length(current_reason) == 0,
-        reason_text,
-    ).otherwise(spark_functions.concat_ws(";", current_reason, reason_text))
-    return spark_functions.when(condition, combined_reason).otherwise(current_reason)
+    # concat_ws ignores nulls. Referencing the previous expression only once
+    # keeps generated Spark code linear as the number of rules grows.
+    previous_reason = spark_functions.when(
+        spark_functions.length(current_reason) > 0,
+        current_reason,
+    )
+    new_reason = spark_functions.when(condition, spark_functions.lit(reason))
+    return spark_functions.concat_ws(";", previous_reason, new_reason)
 
 
 def _apply_row_quality_rules(dataframe, dataset, execution_date):
@@ -212,10 +191,18 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
                     | (spark_functions.col("discount") < 0),
                     "INVALID_DISCOUNT",
                 ),
-                (spark_functions.col("discount") > 100, "DISCOUNT_ABOVE_100"),
+                (
+                    (spark_functions.col("discount_type") == "percentage")
+                    & (spark_functions.col("discount") > 100),
+                    "PERCENTAGE_DISCOUNT_ABOVE_100",
+                ),
                 (
                     spark_functions.col("end_date") < spark_functions.col("start_date"),
                     "INVALID_DATE_RANGE",
+                ),
+                (
+                    ~spark_functions.col("discount_type").isin("percentage", "fixed"),
+                    "INVALID_DISCOUNT_TYPE",
                 ),
             ]
         )
@@ -233,13 +220,20 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
             )
         )
     if dataset == "inventory":
-        rules.append(
-            (
-                spark_functions.col("quantity_available").isNull()
-                | (spark_functions.col("quantity_available") < 0),
-                "INVALID_QUANTITY_AVAILABLE",
+        for quantity_column in (
+            "quantity_available",
+            "quantity_reserved",
+            "quantity_damaged",
+            "reorder_point",
+            "safety_stock",
+        ):
+            rules.append(
+                (
+                    spark_functions.col(quantity_column).isNull()
+                    | (spark_functions.col(quantity_column) < 0),
+                    f"INVALID_{quantity_column.upper()}",
+                )
             )
-        )
     if dataset == "order_items":
         rules.extend(
             [
@@ -253,7 +247,65 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
                     | (spark_functions.col("unit_price") < 0),
                     "INVALID_UNIT_PRICE",
                 ),
+                (
+                    spark_functions.abs(
+                        spark_functions.col("line_total")
+                        - (
+                            spark_functions.col("quantity")
+                            * spark_functions.col("unit_price")
+                            - spark_functions.col("discount_amount")
+                            + spark_functions.col("tax_amount")
+                        )
+                    ) > spark_functions.lit(0.01),
+                    "INVALID_LINE_TOTAL",
+                ),
             ]
+        )
+    if dataset == "orders":
+        rules.append(
+            (
+                spark_functions.abs(
+                    spark_functions.col("total_amount")
+                    - (
+                        spark_functions.col("subtotal_amount")
+                        - spark_functions.col("discount_amount")
+                        + spark_functions.col("shipping_amount")
+                        + spark_functions.col("tax_amount")
+                    )
+                ) > spark_functions.lit(0.01),
+                "INVALID_ORDER_TOTAL",
+            )
+        )
+    if dataset == "payments":
+        rules.extend(
+            [
+                (spark_functions.col("refunded_amount") < 0, "NEGATIVE_REFUND"),
+                (
+                    spark_functions.col("refunded_amount")
+                    > spark_functions.col("amount"),
+                    "REFUND_ABOVE_PAYMENT_AMOUNT",
+                ),
+                (
+                    ~spark_functions.col("payment_method").isin(
+                        "pix", "credit_card", "debit_card", "boleto"
+                    ),
+                    "INVALID_PAYMENT_METHOD",
+                ),
+            ]
+        )
+    if dataset == "customers":
+        rules.append(
+            (
+                ~spark_functions.col("customer_type").isin("individual", "business"),
+                "INVALID_CUSTOMER_TYPE",
+            )
+        )
+    if dataset == "marketing_campaigns":
+        rules.append(
+            (
+                spark_functions.col("end_date") < spark_functions.col("start_date"),
+                "INVALID_DATE_RANGE",
+            )
         )
     if dataset == "exchange_rates":
         rules.extend(
@@ -283,11 +335,31 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
             )
         )
 
+    for currency_column in ("currency", "base_currency"):
+        if currency_column in dataframe.columns:
+            rules.append(
+                (
+                    ~spark_functions.col(currency_column).rlike("^[A-Z]{3}$"),
+                    f"INVALID_CURRENCY:{currency_column}",
+                )
+            )
+    for country_column in ("country_code", "shipping_country_code"):
+        if country_column in dataframe.columns:
+            rules.append(
+                (
+                    ~spark_functions.col(country_column).rlike("^[A-Z]{2}$"),
+                    f"INVALID_COUNTRY_CODE:{country_column}",
+                )
+            )
+
     for condition, message in rules:
         reject_reason = _append_reason(reject_reason, condition, message)
 
     populated_fields = []
+    required_names = set(DATASET_REQUIRED_FIELDS[dataset])
     for field in BRONZE_DATASET_SCHEMAS[dataset].fields:
+        if field.name not in required_names:
+            continue
         populated = spark_functions.col(field.name).isNotNull()
         if isinstance(field.dataType, StringType):
             populated = populated & (spark_functions.col(field.name) != "")
@@ -314,7 +386,7 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
     )
     temporal_columns = {
         "orders": "order_date",
-        "delivery_tracking": "updated_at",
+        "delivery_tracking": "occurred_at",
         "website_events": "timestamp",
         "customers": "created_at",
         "inventory": "updated_at",
@@ -327,6 +399,13 @@ def _apply_row_quality_rules(dataframe, dataset, execution_date):
             spark_functions.to_date(spark_functions.col(temporal_column))
             > end_of_expected_period,
             f"FUTURE_DATE:{temporal_column}",
+        )
+
+    if {"created_at", "updated_at"}.issubset(dataframe.columns):
+        reject_reason = _append_reason(
+            reject_reason,
+            spark_functions.col("updated_at") < spark_functions.col("created_at"),
+            "UPDATED_AT_BEFORE_CREATED_AT",
         )
 
     return (
@@ -345,7 +424,7 @@ def _apply_foreign_key_rules(spark, dataframe, dataset):
                 "_reject_reason",
                 _append_reason(
                     spark_functions.col("_reject_reason"),
-                    spark_functions.lit(True),
+                    spark_functions.col(child_column).isNotNull(),
                     missing_reason,
                 ),
             )
@@ -367,7 +446,8 @@ def _apply_foreign_key_rules(spark, dataframe, dataset):
             "_reject_reason",
             _append_reason(
                 spark_functions.col("_reject_reason"),
-                spark_functions.col("__fk_exists").isNull(),
+                spark_functions.col(child_column).isNotNull()
+                & spark_functions.col("__fk_exists").isNull(),
                 missing_reason,
             ),
         ).drop("__fk_value", "__fk_exists")
@@ -407,6 +487,7 @@ def _apply_cross_table_rules(spark, dataframe, dataset):
 
 def _consolidate_cdc(dataframe, dataset):
     window = Window.partitionBy(PRIMARY_KEYS[dataset]).orderBy(
+        spark_functions.col("updated_at").desc(),
         spark_functions.col("_bronze_processed_at").desc(),
         spark_functions.col("_record_occurrence").desc(),
     )
@@ -422,10 +503,6 @@ def _consolidate_cdc(dataframe, dataset):
 def _silver_columns(dataframe, dataset, run_id):
     source_metadata = ["_source_file", "_source_path", "_ingestion_date"]
     business_columns = [field.name for field in BRONZE_DATASET_SCHEMAS[dataset].fields]
-    if dataset == "order_items":
-        business_columns.append("line_total")
-    if dataset == "coupons":
-        business_columns.append("is_active")
 
     hash_columns = [
         spark_functions.coalesce(
@@ -484,6 +561,10 @@ def _count_upsert_changes(spark, dataframe, dataset, target_path):
     updated = comparison.filter(
         spark_functions.col(f"target.{first_key}").isNotNull()
         & (
+            spark_functions.col("source.updated_at")
+            >= spark_functions.col("target.updated_at")
+        )
+        & (
             spark_functions.col("source._silver_record_hash")
             != spark_functions.col("target._silver_record_hash")
         )
@@ -503,7 +584,10 @@ def _merge_silver(spark, dataframe, dataset, target_path):
         .alias("target")
         .merge(dataframe.alias("source"), merge_condition)
         .whenMatchedUpdateAll(
-            condition=("target._silver_record_hash <> source._silver_record_hash")
+            condition=(
+                "source.updated_at >= target.updated_at AND "
+                "target._silver_record_hash <> source._silver_record_hash"
+            )
         )
         .whenNotMatchedInsertAll()
         .execute()
@@ -772,12 +856,13 @@ def transform_bronze_silver(spark, run_id, execution_date):
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark
+    from utils.job import job_arguments, job_spark, raise_for_failed_events
 
     arguments = job_arguments("Transform Bronze data into Silver.")
     with job_spark("bronze_to_silver") as spark_session:
-        transform_bronze_silver(
+        cli_events = transform_bronze_silver(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
         )
+    raise_for_failed_events(cli_events, "Bronze to Silver transformation")
