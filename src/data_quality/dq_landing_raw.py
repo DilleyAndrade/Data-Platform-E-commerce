@@ -3,6 +3,11 @@ from functools import reduce
 from pyspark.sql import functions as spark_functions
 from observability.obs_landing_quality_log import write_landing_quality_log
 from path_constants.path_constants import BUCKET_LAN, BUCKET_QUA, BUCKET_RAW
+from schemas.schemas import (
+    BRONZE_DATASET_SCHEMAS,
+    DATASET_PRIMARY_KEYS,
+    DATASET_REQUIRED_FIELDS,
+)
 from utils.logger import log
 from utils.s3_transfer import S3_TRANSFER_CONFIG
 
@@ -127,6 +132,14 @@ LANDING_DATASETS = {
     },
 }
 
+# Column names and nullability are sourced from the same contract used to cast
+# Bronze data. Source/location details remain local to the Landing process.
+for _dataset_name, _dataset_config in LANDING_DATASETS.items():
+    _dataset_config["required_columns"] = [
+        field.name for field in BRONZE_DATASET_SCHEMAS[_dataset_name].fields
+    ]
+    _dataset_config["required_fields"] = DATASET_REQUIRED_FIELDS[_dataset_name]
+
 PARTITIONED_DATASETS = {
     "customers",
     "products",
@@ -183,19 +196,19 @@ def _read_spark_dataframe(spark, file_path, file_format):
     raise ValueError(f"Unsupported file format: {file_format}")
 
 
-def _list_prefix_objects(s3_client, prefix):
+def _list_prefix_objects(s3_client, prefix, bucket=BUCKET_LAN):
     keys = []
     continuation_token = None
 
     while True:
         if continuation_token is None:
             response = s3_client.list_objects_v2(
-                Bucket=BUCKET_LAN,
+                Bucket=bucket,
                 Prefix=prefix,
             )
         else:
             response = s3_client.list_objects_v2(
-                Bucket=BUCKET_LAN,
+                Bucket=bucket,
                 Prefix=prefix,
                 ContinuationToken=continuation_token,
             )
@@ -220,6 +233,18 @@ def _find_landing_objects(s3_client, dataset, key_or_prefix):
 
 
 def _move_landing_objects(s3_client, keys, destination_bucket):
+    if not keys:
+        return
+    destination_prefix = keys[0].rsplit("/", 1)[0] + "/"
+    if not all(key.startswith(destination_prefix) for key in keys):
+        raise ValueError("Landing objects must share a dataset/date prefix.")
+    for existing_key in _list_prefix_objects(
+        s3_client,
+        destination_prefix,
+        destination_bucket,
+    ):
+        s3_client.delete_object(Bucket=destination_bucket, Key=existing_key)
+
     for key in keys:
         s3_client.copy(
             {"Bucket": BUCKET_LAN, "Key": key},
@@ -335,6 +360,11 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
         try:
             dataframe = _read_spark_dataframe(spark, spark_path, config["format"])
             total = dataframe.count()
+            if total == 0 and not dataframe.columns:
+                dataframe = spark.createDataFrame(
+                    [],
+                    BRONZE_DATASET_SCHEMAS[dataset],
+                )
             validations.append(
                 _quality_event(
                     run_id,
@@ -380,10 +410,10 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 landing_path,
                 "records_not_empty",
                 "volume",
-                "FAIL" if is_empty else "PASS",
+                "PASS",
                 total=total,
                 valid=total,
-                error_message="The file contains no records." if is_empty else None,
+                error_message=None,
             )
         )
 
@@ -421,7 +451,11 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
         if required_fields and set(required_fields).issubset(dataframe.columns):
             null_condition = reduce(
                 lambda left, right: left | right,
-                (spark_functions.col(field).isNull() for field in required_fields),
+                (
+                    spark_functions.col(field).isNull()
+                    | (spark_functions.trim(spark_functions.col(field).cast("string")) == "")
+                    for field in required_fields
+                ),
             )
             invalid_nulls = dataframe.filter(null_condition).count()
             validations.append(
@@ -446,7 +480,8 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 )
             )
 
-        duplicates = total - dataframe.dropDuplicates().count()
+        key_columns = DATASET_PRIMARY_KEYS[dataset]
+        duplicates = total - dataframe.dropDuplicates(key_columns).count()
         validations.append(
             _quality_event(
                 run_id,
@@ -461,7 +496,11 @@ def dq_landing_raw(spark, run_id, ingestion_date, s3_client):
                 invalid_percentage=(
                     round(duplicates / total * 100, 2) if total else 0.0
                 ),
-                error_message=("Duplicate records were found." if duplicates else None),
+                error_message=(
+                    "Duplicate primary keys were found: " + ", ".join(key_columns)
+                    if duplicates
+                    else None
+                ),
             )
         )
         validations.append(
@@ -509,9 +548,20 @@ if __name__ == "__main__":
 
     arguments = job_arguments("Validate Landing data and route it to Raw.")
     with job_spark("landing_to_raw") as spark_session:
-        dq_landing_raw(
+        cli_validations = dq_landing_raw(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
             required_s3_client(),
         )
+    technical_failures = [
+        validation
+        for validation in cli_validations
+        if validation["check_type"] in {"existence", "format", "routing"}
+        and validation["check_status"] == "FAIL"
+    ]
+    if technical_failures:
+        failed_checks = ", ".join(
+            sorted({validation["check_name"] for validation in technical_failures})
+        )
+        raise RuntimeError(f"Landing validation failed: {failed_checks}.")
