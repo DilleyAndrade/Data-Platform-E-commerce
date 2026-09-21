@@ -33,3 +33,22 @@ def required_s3_client():
     if client is None:
         raise ConnectionError("Could not create the S3/MinIO client.")
     return client
+
+
+def raise_for_failed_events(events, stage):
+    failures = [
+        event
+        for event in events
+        if str(event.get("status", event.get("execution_status", ""))).upper()
+        == "FAILED"
+    ]
+    if failures:
+        names = [
+            event.get("dataset_name")
+            or event.get("source_table")
+            or event.get("target_table")
+            or event.get("file_name")
+            or "unknown"
+            for event in failures
+        ]
+        raise RuntimeError(f"{stage} failed for: {', '.join(map(str, names))}")

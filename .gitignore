@@ -3,3 +3,7 @@ __pycache__/
 __init__.py
 .env
 notation.txt
+api_data_platform/dataset/.api*
+airflow/logs/
+airflow/airflow.db
+airflow/standalone_admin_password.txt

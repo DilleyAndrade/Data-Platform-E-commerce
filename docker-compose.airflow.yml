@@ -1,0 +1,47 @@
+services:
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: data-platform-airflow:2.11.2
+    command:
+      - bash
+      - -c
+      - |
+        airflow scheduler &
+        exec airflow webserver
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Sao_Paulo
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "airflowadmin"
+      _AIRFLOW_WWW_USER_ROLE: "Admin"
+      PYTHONPATH: /opt/airflow/data-platform/src:/opt/airflow/data-platform
+      PYSPARK_PYTHON: python
+      PYSPARK_DRIVER_PYTHON: python
+      SPARK_MASTER: local[*]
+      GENERATOR_AVERAGE_RECORDS: ${GENERATOR_AVERAGE_RECORDS:-2000}
+      AWS_ENDPOINT_URL: ${AIRFLOW_AWS_ENDPOINT_URL:-http://host.docker.internal:9000}
+      API_BASE_URL: ${AIRFLOW_API_BASE_URL:-http://host.docker.internal:8000}
+      PG_HOST: ${AIRFLOW_PG_HOST:-host.docker.internal}
+      MYSQL_HOST: ${AIRFLOW_MYSQL_HOST:-host.docker.internal}
+      PROMETHEUS_PUSHGATEWAY_URL: ${AIRFLOW_PROMETHEUS_PUSHGATEWAY_URL:-http://host.docker.internal:9091}
+    ports:
+      - "8080:8080"
+    volumes:
+      - airflow2_fixed_home:/opt/airflow
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./:/opt/airflow/data-platform
+    working_dir: /opt/airflow/data-platform
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  airflow2_fixed_home:

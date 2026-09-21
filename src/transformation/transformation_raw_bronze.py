@@ -26,11 +26,14 @@ def _raw_prefix_exists(s3_client, prefix):
     return bool(response.get("Contents"))
 
 
-def _read_raw_dataframe(spark, path, file_format):
+def _read_raw_dataframe(spark, path, file_format, schema=None):
     if file_format == "csv":
         return spark.read.option("header", True).option("inferSchema", True).csv(path)
     if file_format == "json":
-        return spark.read.option("multiLine", True).json(path)
+        dataframe = spark.read.option("multiLine", True).json(path)
+        if schema is not None and not dataframe.columns and dataframe.rdd.isEmpty():
+            return spark.createDataFrame([], schema)
+        return dataframe
     if file_format == "parquet":
         return spark.read.parquet(path)
     raise ValueError(f"Unsupported file format: {file_format}")
@@ -145,7 +148,6 @@ def _write_new_unpartitioned_table(dataframe, target_path):
 
 
 def _write_bronze_delta(spark, dataframe, target_path, execution_date):
-    partition = execution_date.isoformat()
     if not DeltaTable.isDeltaTable(spark, target_path):
         _write_new_unpartitioned_table(dataframe, target_path)
         return
@@ -159,19 +161,6 @@ def _write_bronze_delta(spark, dataframe, target_path, execution_date):
             target_path,
             partition_columns,
         )
-        (
-            dataframe.write.format("delta")
-            .mode("overwrite")
-            .option("replaceWhere", f"_ingestion_date = DATE '{partition}'")
-            .option("mergeSchema", "false")
-            .option(
-                "optimizeWrite",
-                os.getenv("SPARK_DELTA_OPTIMIZE_WRITE", "false"),
-            )
-            .partitionBy("_ingestion_date")
-            .save(target_path)
-        )
-        return
 
     merge_condition = (
         "target._ingestion_date = source._ingestion_date AND "
@@ -183,9 +172,6 @@ def _write_bronze_delta(spark, dataframe, target_path, execution_date):
         .merge(dataframe.alias("source"), merge_condition)
         .whenMatchedUpdateAll()
         .whenNotMatchedInsertAll()
-        .whenNotMatchedBySourceDelete(
-            condition=f"target._ingestion_date = DATE '{partition}'"
-        )
         .execute()
     )
 
@@ -260,7 +246,12 @@ def transformation_raw_bronze(spark, run_id, execution_date, s3_client):
             target_path,
         )
         try:
-            dataframe = _read_raw_dataframe(spark, source_path, config["format"])
+            dataframe = _read_raw_dataframe(
+                spark,
+                source_path,
+                config["format"],
+                schema,
+            )
             records_input = dataframe.count()
             dataframe = _apply_bronze_schema(dataframe, schema)
             dataframe = _add_bronze_metadata(
@@ -337,13 +328,19 @@ def transformation_raw_bronze(spark, run_id, execution_date, s3_client):
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark, required_s3_client
+    from utils.job import (
+        job_arguments,
+        job_spark,
+        raise_for_failed_events,
+        required_s3_client,
+    )
 
     arguments = job_arguments("Transform Raw data into Bronze.")
     with job_spark("raw_to_bronze") as spark_session:
-        transformation_raw_bronze(
+        cli_events = transformation_raw_bronze(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
             required_s3_client(),
         )
+    raise_for_failed_events(cli_events, "Raw to Bronze transformation")

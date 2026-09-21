@@ -20,6 +20,7 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'local_data_source'
 CSV_NAMES = ('coupons', 'delivery_tracking', 'payments')
+LOCAL_DATASETS = ('coupons', 'payments', 'delivery_tracking', 'website_events')
 
 
 def stamp(value):
@@ -169,6 +170,27 @@ def generate(rng, average, existing, now, references):
     return anomaly, batch
 
 
+def generate_selected(rng, average, existing, now, references, campaigns, selected):
+    anomaly, counts = choose_volume(rng, average)
+    batch = {}
+    if 'coupons' in selected:
+        batch['coupons'] = generate_coupons(rng, counts['coupons'], now)
+    if 'payments' in selected:
+        batch['payments'] = generate_payments(
+            rng, counts['payments'], existing['payments'], now, references
+        )
+    if 'delivery_tracking' in selected:
+        batch['delivery_tracking'] = generate_delivery_tracking(
+            rng, counts['payments'], existing['delivery_tracking'], now, references
+        )
+    if 'website_events' in selected:
+        event_count = max(0, counts['total'] - counts['coupons'] - 2 * counts['payments'])
+        batch['website_events'] = generate_website_events(
+            rng, event_count, existing['website_events'], now, references, campaigns
+        )
+    return anomaly, batch
+
+
 def save_table(name, existing, rows, headers):
     if name == 'website_events':
         from jsonschema import Draft202012Validator, FormatChecker
@@ -211,17 +233,40 @@ def save(existing, batch, headers):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--average-records', type=int, default=2000)
+    parser.add_argument('--datasets', nargs='+', choices=LOCAL_DATASETS,
+                        help='Gera somente os datasets informados; por padrao gera todos.')
     parser.add_argument('--seed', type=int)
     parser.add_argument('--dry-run', action='store_true', help='Gera em memória, sem alterar os arquivos.')
     args = parser.parse_args()
     if not 100 <= args.average_records <= 100000:
         parser.error('--average-records deve estar entre 100 e 100000.')
     existing, headers = read_sources()
-    references = load_references()
-    anomaly, batch = generate(random.Random(args.seed), args.average_records, existing, datetime.now(timezone.utc), references)
+    selected = tuple(dict.fromkeys(args.datasets or LOCAL_DATASETS))
+    needs_references = any(name != 'coupons' for name in selected)
+    references = load_references() if needs_references else dict(
+        customers=[], products=[], orders=[], items=[]
+    )
+    campaigns = ()
+    if 'website_events' in selected:
+        from api_data_platform.data_store import read_dataset
+        campaigns = read_dataset('marketing_campaigns')
+    if args.datasets:
+        anomaly, batch = generate_selected(
+            random.Random(args.seed), args.average_records, existing,
+            datetime.now(timezone.utc), references, campaigns, selected
+        )
+    else:
+        anomaly, batch = generate(
+            random.Random(args.seed), args.average_records, existing,
+            datetime.now(timezone.utc), references
+        )
     validate_generated(batch, references)
     if not args.dry_run:
-        save(existing, batch, headers)
+        if args.datasets:
+            for name, rows in batch.items():
+                save_table(name, existing[name], rows, headers)
+        else:
+            save(existing, batch, headers)
     print(json.dumps(dict(anomalous=anomaly, dry_run=args.dry_run,
         total_records=sum(map(len, batch.values())), records={name: len(rows) for name, rows in batch.items()}), indent=2))
 

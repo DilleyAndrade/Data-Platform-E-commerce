@@ -4,6 +4,12 @@ from datetime import date, datetime
 from typing import Any
 from dotenv import load_dotenv
 from observability.obs_ingestion_log import create_ingestion_log, write_ingestion_log
+from ingestion.incremental_state import (
+    attach_watermark_candidate,
+    configured_watermark_upper_bound,
+    incremental_window,
+    utc_now,
+)
 from path_constants.path_constants import BUCKET_LAN
 from utils.logger import log
 
@@ -54,23 +60,43 @@ def _jdbc_reader(spark, jdbc_config, dbtable):
     )
 
 
-def read_postgres_table(spark, table_name, jdbc_config, num_partitions):
+def _postgres_incremental_source(table_name, lower_bound, upper_bound):
+    qualified_table = f"{POSTGRES_SCHEMA}.{table_name}"
+    if lower_bound is None or upper_bound is None:
+        return qualified_table
+    lower = lower_bound.strftime("%Y-%m-%d %H:%M:%S.%f")
+    upper = upper_bound.strftime("%Y-%m-%d %H:%M:%S.%f")
+    return (
+        f"(SELECT * FROM {qualified_table} "
+        f"WHERE updated_at >= TIMESTAMPTZ '{lower}+00:00' "
+        f"AND updated_at < TIMESTAMPTZ '{upper}+00:00') AS incremental_source"
+    )
+
+
+def read_postgres_table(
+    spark,
+    table_name,
+    jdbc_config,
+    num_partitions,
+    lower_bound=None,
+    upper_bound=None,
+):
     if table_name not in POSTGRES_TABLES:
         raise ValueError(f"PostgreSQL table is not allowed: {table_name}")
     if num_partitions <= 0:
         raise ValueError("PostgreSQL JDBC partitions must be greater than zero.")
 
     partition_column = POSTGRES_TABLES[table_name]
-    qualified_table = f"{POSTGRES_SCHEMA}.{table_name}"
+    source = _postgres_incremental_source(table_name, lower_bound, upper_bound)
     bounds_query = (
         f"(SELECT MIN({partition_column}) AS lower_bound, "
         f"MAX({partition_column}) AS upper_bound, "
-        f"COUNT(*) AS record_count FROM {qualified_table}) AS bounds"
+        f"COUNT(*) AS record_count FROM {source}) AS bounds"
     )
     bounds = _jdbc_reader(spark, jdbc_config, bounds_query).load().first()
 
     if bounds.lower_bound is None:
-        return _jdbc_reader(spark, jdbc_config, qualified_table).load()
+        return _jdbc_reader(spark, jdbc_config, source).load()
 
     effective_partitions = min(
         num_partitions,
@@ -78,7 +104,7 @@ def read_postgres_table(spark, table_name, jdbc_config, num_partitions):
     )
 
     return (
-        _jdbc_reader(spark, jdbc_config, qualified_table)
+        _jdbc_reader(spark, jdbc_config, source)
         .option("partitionColumn", partition_column)
         .option("lowerBound", bounds.lower_bound)
         .option("upperBound", bounds.upper_bound)
@@ -100,6 +126,7 @@ def ingestion_postgres(
     run_id: str,
     ingestion_date: date,
     num_partitions: int = DEFAULT_JDBC_PARTITIONS,
+    watermark_upper_bound: datetime | None = None,
 ) -> list[dict[str, Any]]:
     log.info("Started PostgreSQL ingestion.")
     jdbc_config = create_postgres_jdbc_config()
@@ -107,6 +134,12 @@ def ingestion_postgres(
 
     for table_name in POSTGRES_TABLES:
         started_at = datetime.now()
+        window = incremental_window(
+            spark,
+            "postgres",
+            table_name,
+            watermark_upper_bound or configured_watermark_upper_bound() or utc_now(),
+        )
         spark_path, log_path = build_landing_location(table_name, ingestion_date)
         log.info(
             "Reading PostgreSQL table %s.%s with Spark JDBC.",
@@ -120,6 +153,8 @@ def ingestion_postgres(
                 table_name,
                 jdbc_config,
                 num_partitions,
+                window.lower_bound,
+                window.upper_bound,
             )
             dataframe.write.mode("overwrite").parquet(spark_path)
             status = "SUCCESS"
@@ -130,8 +165,7 @@ def ingestion_postgres(
             log.exception("Failed to ingest PostgreSQL table %s.", table_name)
 
         ended_at = datetime.now()
-        ingestion_logs.append(
-            create_ingestion_log(
+        event = create_ingestion_log(
                 run_id,
                 "postgres",
                 table_name,
@@ -143,7 +177,9 @@ def ingestion_postgres(
                 status,
                 error_message,
             )
-        )
+        if status == "SUCCESS":
+            attach_watermark_candidate(event, window)
+        ingestion_logs.append(event)
 
     write_ingestion_log(spark, ingestion_logs)
     log.info("Finished PostgreSQL ingestion.")
@@ -151,12 +187,13 @@ def ingestion_postgres(
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark
+    from utils.job import job_arguments, job_spark, raise_for_failed_events
 
     arguments = job_arguments("Ingest PostgreSQL tables into Landing.")
     with job_spark("landing_ingestion_postgres") as spark_session:
-        ingestion_postgres(
+        cli_events = ingestion_postgres(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
         )
+    raise_for_failed_events(cli_events, "PostgreSQL ingestion")

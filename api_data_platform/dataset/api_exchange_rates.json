@@ -1,5 +1,26 @@
-{
-  "date": "2026-07-25",
-  "usd_brl": 5.41,
-  "eur_brl": 6.32
-}
+[
+  {
+    "exchange_rate_id": 1,
+    "date": "2026-09-07",
+    "base_currency": "BRL",
+    "usd_brl": 5.218716,
+    "eur_brl": 5.646421,
+    "provider": "synthetic_reference",
+    "rate_type": "daily_reference",
+    "published_at": "2026-09-07T17:59:55.813039Z",
+    "created_at": "2026-09-07T17:59:55.813039Z",
+    "updated_at": "2026-09-07T17:59:55.813039Z"
+  },
+  {
+    "exchange_rate_id": 2,
+    "date": "2026-09-13",
+    "base_currency": "BRL",
+    "usd_brl": 5.159365,
+    "eur_brl": 5.601256,
+    "provider": "synthetic_reference",
+    "rate_type": "daily_reference",
+    "published_at": "2026-09-13T19:22:15.562314Z",
+    "created_at": "2026-09-13T19:22:16.030558Z",
+    "updated_at": "2026-09-13T19:22:16.030558Z"
+  }
+]

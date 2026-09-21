@@ -41,7 +41,11 @@ def write_ingestion_log(spark, logs):
         len(logs),
         target_path,
     )
-    dataframe = spark.createDataFrame(logs, schema=ingestion_log_schema)
+    public_logs = [
+        {field.name: event.get(field.name) for field in ingestion_log_schema.fields}
+        for event in logs
+    ]
+    dataframe = spark.createDataFrame(public_logs, schema=ingestion_log_schema)
     dataframe.write.format("delta").mode("append").save(target_path)
     log.info(
         "Observability table written: table=ingestion_log events=%s path=%s.",
