@@ -4,6 +4,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from observability.obs_ingestion_log import create_ingestion_log, write_ingestion_log
+from ingestion.incremental_state import (
+    attach_watermark_candidate,
+    configured_watermark_upper_bound,
+    incremental_window,
+    utc_now,
+)
 from path_constants.path_constants import (
     BUCKET_LAN,
     URL_CUSTOMER_REVIEW,
@@ -56,12 +62,21 @@ def stream_api_to_s3(
     url: str,
     dataset: str,
     ingestion_date: date,
+    lower_bound: datetime | None = None,
+    upper_bound: datetime | None = None,
 ) -> str:
     key, s3_path = build_landing_location(dataset, ingestion_date)
     log.info("Streaming API %s to %s.", url, key)
 
+    parameters = None
+    if lower_bound is not None and upper_bound is not None:
+        parameters = {
+            "updated_at_from": lower_bound.isoformat(timespec="microseconds") + "Z",
+            "updated_at_until": upper_bound.isoformat(timespec="microseconds") + "Z",
+        }
     with http_session.get(
         url,
+        params=parameters,
         stream=True,
         timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
         headers={"Accept": "application/json"},
@@ -86,6 +101,7 @@ def ingestion_api(
     ingestion_date: date,
     s3_client: Any,
     http_session: requests.Session | None = None,
+    watermark_upper_bound: datetime | None = None,
 ) -> list[dict[str, Any]]:
     log.info("Started API ingestion.")
     if s3_client is None:
@@ -98,6 +114,14 @@ def ingestion_api(
     try:
         for url, dataset in API_SOURCES:
             started_at = datetime.now()
+            window = incremental_window(
+                spark,
+                "api",
+                dataset,
+                watermark_upper_bound
+                or configured_watermark_upper_bound()
+                or utc_now(),
+            )
             _, s3_path = build_landing_location(dataset, ingestion_date)
 
             try:
@@ -107,6 +131,8 @@ def ingestion_api(
                     url,
                     dataset,
                     ingestion_date,
+                    window.lower_bound,
+                    window.upper_bound,
                 )
                 status = "SUCCESS"
                 error_message = ""
@@ -116,8 +142,7 @@ def ingestion_api(
                 log.exception("Failed to ingest API dataset %s from %s.", dataset, url)
 
             ended_at = datetime.now()
-            ingestion_logs.append(
-                create_ingestion_log(
+            event = create_ingestion_log(
                     run_id,
                     "api",
                     dataset,
@@ -129,7 +154,9 @@ def ingestion_api(
                     status,
                     error_message,
                 )
-            )
+            if status == "SUCCESS":
+                attach_watermark_candidate(event, window)
+            ingestion_logs.append(event)
     finally:
         if owns_session:
             session.close()
@@ -140,13 +167,19 @@ def ingestion_api(
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark, required_s3_client
+    from utils.job import (
+        job_arguments,
+        job_spark,
+        raise_for_failed_events,
+        required_s3_client,
+    )
 
     arguments = job_arguments("Ingest API datasets into Landing.")
     with job_spark("landing_ingestion_api") as spark_session:
-        ingestion_api(
+        cli_events = ingestion_api(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
             required_s3_client(),
         )
+    raise_for_failed_events(cli_events, "API ingestion")
