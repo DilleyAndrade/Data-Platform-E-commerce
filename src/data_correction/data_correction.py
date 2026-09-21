@@ -4,6 +4,7 @@ from pyspark.sql import functions as spark_functions
 from data_quality.dq_landing_raw import LANDING_DATASETS
 from observability.obs_data_correction_log import write_data_correction_log
 from path_constants.path_constants import BUCKET_OBS, BUCKET_QUA, BUCKET_RAW
+from schemas.schemas import DATASET_PRIMARY_KEYS
 from utils.logger import log
 
 
@@ -65,19 +66,21 @@ def _normalize_schema(dataframe, expected_columns):
     return dataframe.select(expected_columns), corrections
 
 
-def _count_still_invalid(dataframe, required_fields):
+def _count_still_invalid(dataframe, required_fields, primary_keys):
     invalid_nulls = 0
     if required_fields and set(required_fields).issubset(dataframe.columns):
         condition = None
         for field in required_fields:
-            field_is_null = spark_functions.col(field).isNull()
+            field_is_null = spark_functions.col(field).isNull() | (
+                spark_functions.trim(spark_functions.col(field).cast("string")) == ""
+            )
             condition = (
                 field_is_null if condition is None else condition | field_is_null
             )
         invalid_nulls = dataframe.filter(condition).count()
 
     total = dataframe.count()
-    duplicates = total - dataframe.dropDuplicates().count()
+    duplicates = total - dataframe.dropDuplicates(primary_keys).count()
     return min(total, invalid_nulls + duplicates)
 
 
@@ -209,6 +212,7 @@ def data_correction(spark, correction_run_id, execution_date, s3_client):
             records_still_invalid = _count_still_invalid(
                 dataframe,
                 config["required_fields"],
+                DATASET_PRIMARY_KEYS[dataset],
             )
             partition = execution_date.strftime("%Y%m%d")
             target_key = f"{dataset}/ingestion_date_{partition}/"
@@ -277,13 +281,19 @@ def data_correction(spark, correction_run_id, execution_date, s3_client):
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark, required_s3_client
+    from utils.job import (
+        job_arguments,
+        job_spark,
+        raise_for_failed_events,
+        required_s3_client,
+    )
 
     arguments = job_arguments("Correct quarantined records.")
     with job_spark("data_correction") as spark_session:
-        data_correction(
+        cli_events = data_correction(
             spark_session,
             f"correction_{arguments.run_id}",
             arguments.execution_date,
             required_s3_client(),
         )
+    raise_for_failed_events(cli_events, "Data correction")
