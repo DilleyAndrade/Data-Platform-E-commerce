@@ -103,7 +103,8 @@ def _sales_detail(silver):
         .select(
             spark_functions.col("items.order_item_id"),
             spark_functions.col("orders.order_id"),
-            spark_functions.col("orders.order_date"),
+            spark_functions.col("orders.order_date").alias("order_timestamp"),
+            spark_functions.to_date("orders.order_date").alias("order_date"),
             spark_functions.col("orders.status").alias("order_status"),
             spark_functions.col("customers.customer_id"),
             spark_functions.col("customers.name").alias("customer_name"),
@@ -135,7 +136,8 @@ def _sales_detail(silver):
     order_totals = (
         orders.select(
             spark_functions.col("orders.order_id").alias("order_id"),
-            spark_functions.col("orders.order_date").alias("order_date"),
+            spark_functions.col("orders.order_date").alias("order_timestamp"),
+            spark_functions.to_date("orders.order_date").alias("order_date"),
             spark_functions.col("orders.customer_id").alias("customer_id"),
         )
         .join(
@@ -212,7 +214,8 @@ def _payments(silver):
         .select(
             spark_functions.col("payments.payment_id"),
             spark_functions.col("payments.order_id"),
-            spark_functions.col("orders.order_date"),
+            spark_functions.col("orders.order_date").alias("order_timestamp"),
+            spark_functions.to_date("orders.order_date").alias("order_date"),
             spark_functions.col("customers.customer_id"),
             spark_functions.col("customers.state").alias("customer_state"),
             spark_functions.col("payments.payment_method"),
@@ -300,10 +303,10 @@ def _logistics(silver):
             spark_functions.col("customers.city").alias("customer_city"),
             spark_functions.col("customers.state").alias("customer_state"),
             spark_functions.col("tracking.status").alias("delivery_status"),
-            spark_functions.col("tracking.updated_at"),
+            spark_functions.col("tracking.occurred_at"),
             (
                 (
-                    spark_functions.unix_timestamp("tracking.updated_at")
+                    spark_functions.unix_timestamp("tracking.occurred_at")
                     - spark_functions.unix_timestamp("orders.order_date")
                 )
                 / 3600
@@ -782,7 +785,9 @@ def _validate_sales_reconciliation(silver, tables):
                 f"fact_sales={fact_revenue}"
             )
 
-    expected_periods = silver["orders"].select("order_date").distinct()
+    expected_periods = silver["orders"].select(
+        spark_functions.to_date("order_date").alias("order_date")
+    ).distinct()
     actual_periods = tables["sales_daily"].select("order_date").distinct()
     if expected_periods.subtract(actual_periods).limit(1).count():
         errors.append("MISSING_PERIOD:sales_daily.order_date")
@@ -1116,12 +1121,13 @@ def transform_silver_gold(spark, run_id, execution_date):
 
 
 if __name__ == "__main__":
-    from utils.job import job_arguments, job_spark
+    from utils.job import job_arguments, job_spark, raise_for_failed_events
 
     arguments = job_arguments("Transform Silver data into Gold.")
     with job_spark("silver_to_gold") as spark_session:
-        transform_silver_gold(
+        cli_events = transform_silver_gold(
             spark_session,
             arguments.run_id,
             arguments.execution_date,
         )
+    raise_for_failed_events(cli_events, "Silver to Gold transformation")
