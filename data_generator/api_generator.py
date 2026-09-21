@@ -19,6 +19,7 @@ COMMENTS = {
     4: ('Bom produto', 'Bom acabamento e funcionamento conforme a descrição.'),
     5: ('Muito satisfeito', 'Produto de boa qualidade, atendeu muito bem às expectativas.'),
 }
+API_DATASETS = ('customer_reviews', 'marketing_campaigns', 'exchange_rates')
 
 
 def generate_customer_reviews(rng, count, now, references, existing_reviews=()):
@@ -104,25 +105,54 @@ def generate(rng, average, now, references, existing_reviews=()):
                          exchange_rates=generate_exchange_rates(now))
 
 
+def generate_selected(rng, average, now, references, existing_reviews, selected):
+    anomaly, counts = choose_volume(rng, average)
+    datasets = {}
+    if 'customer_reviews' in selected:
+        datasets['customer_reviews'] = generate_customer_reviews(
+            rng, counts['customer_reviews'], now, references, existing_reviews
+        )
+    if 'marketing_campaigns' in selected:
+        datasets['marketing_campaigns'] = generate_marketing_campaigns(
+            rng, counts['marketing_campaigns'], now
+        )
+    if 'exchange_rates' in selected:
+        datasets['exchange_rates'] = generate_exchange_rates(now)
+    return anomaly, datasets
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--average-records', type=int, default=2000)
+    parser.add_argument('--datasets', nargs='+', choices=API_DATASETS,
+                        help='Gera somente os datasets informados; por padrao gera todos.')
     parser.add_argument('--seed', type=int, help='Reproduz o sorteio de volume; omita na rotina diária.')
     parser.add_argument('--dry-run', action='store_true', help='Gera em memória sem alterar os arquivos.')
     args = parser.parse_args()
     if not 30 <= args.average_records <= 100000:
         parser.error('--average-records deve estar entre 30 e 100000.')
-    references = load_references()
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from api_data_platform.data_store import read_dataset, append_batch
-    existing_reviews = read_dataset('customer_reviews')
-    anomaly, datasets = generate(random.Random(args.seed), args.average_records, datetime.now(timezone.utc), references, existing_reviews)
+    selected = tuple(dict.fromkeys(args.datasets or API_DATASETS))
+    needs_references = 'customer_reviews' in selected
+    references = load_references() if needs_references else dict(
+        customers=[], products=[], orders=[], items=[]
+    )
+    if needs_references:
+        from api_data_platform.data_store import read_dataset
+        existing_reviews = read_dataset('customer_reviews')
+    else:
+        existing_reviews = ()
+    anomaly, datasets = generate_selected(
+        random.Random(args.seed), args.average_records, datetime.now(timezone.utc),
+        references, existing_reviews, selected
+    )
     validate_generated(datasets, references)
     payload = dict(run_id=uuid.uuid4().hex, datasets=datasets)
     summary = dict(run_id=payload['run_id'], anomalous=anomaly, dry_run=args.dry_run,
                    generated={name: len(rows) for name, rows in datasets.items()})
     if not args.dry_run:
+        from api_data_platform.data_store import append_batch
         summary['persisted'] = append_batch(payload)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
