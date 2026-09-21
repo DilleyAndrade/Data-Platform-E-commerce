@@ -50,8 +50,8 @@ def dependency_order():
 
 
 class Generation:
-    def __init__(self, average, seed):
-        self.run_id = uuid.uuid4().hex
+    def __init__(self, average, seed, run_id=None):
+        self.run_id = hashlib.sha256(run_id.encode()).hexdigest()[:32] if run_id else uuid.uuid4().hex
         self.rng = {}
         for source in ('postgres', 'mysql', 'api', 'local'):
             derived = None if seed is None else int.from_bytes(hashlib.sha256(f'{seed}:{source}'.encode()).digest()[:8], 'big')
@@ -204,14 +204,70 @@ def run_all(average=2000, seed=None, dry_run=False):
     return 0
 
 
+def run_steps(steps, average=2000, seed=None, run_id=None, dry_run=False):
+    """Executa um grupo de etapas no mesmo processo para uso por orquestradores."""
+    order = dependency_order()
+    unknown = set(steps) - set(order)
+    if unknown:
+        raise ValueError(f'Etapas desconhecidas: {", ".join(sorted(unknown))}.')
+    selected = [name for name in order if name in steps]
+    if not selected:
+        raise ValueError('Informe pelo menos uma etapa de geraÃ§Ã£o.')
+
+    mysql_transaction = {'orders', 'order_items', 'inventory'}
+    selected_mysql = set(selected) & mysql_transaction
+    if selected_mysql and selected_mysql != mysql_transaction:
+        raise ValueError('orders, order_items e inventory devem executar juntos na mesma transaÃ§Ã£o.')
+
+    stable_seed = seed
+    if stable_seed is None and run_id:
+        stable_seed = int.from_bytes(hashlib.sha256(run_id.encode()).digest()[:8], 'big')
+    generation = Generation(average, stable_seed, run_id)
+    print('Etapas: ' + ' -> '.join(selected), flush=True)
+    if dry_run:
+        print('Plano exibido. Nenhum banco consultado ou dado gravado.')
+        return 0
+
+    # Quando coupons foi executado em uma tarefa anterior, contabiliza seu volume
+    # para que website_events mantenha o mesmo orçamento total do run_all.
+    if 'website_events' in selected and 'coupons' not in selected:
+        generation.local_inserted = generation.local_counts['coupons']
+
+    completed = []
+    current = 'preparaÃ§Ã£o'
+    started = monotonic()
+    with ExitStack() as stack:
+        try:
+            generation.open(stack)
+            for current in selected:
+                print(f'[{len(completed)+1}/{len(selected)}] {current}', flush=True)
+                result = getattr(generation, current)()
+                completed.append(current)
+                print(json.dumps(dict(table=current, records=result), ensure_ascii=False), flush=True)
+        except (Exception, KeyboardInterrupt) as error:
+            if generation.mysql_pending:
+                generation.mysql_connection.rollback()
+                completed = [name for name in completed if name not in mysql_transaction]
+            detail = str(error).strip() or 'ExceÃ§Ã£o sem mensagem.'
+            print(f'Falha em {current}: {type(error).__name__}: {detail} Etapas confirmadas: {", ".join(completed) or "nenhuma"}.', file=sys.stderr)
+            return 130 if isinstance(error, KeyboardInterrupt) else 1
+    print(f'GeraÃ§Ã£o parcial concluÃ­da em {monotonic()-started:.1f}s.', flush=True)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--average-records', type=int, default=2000)
     parser.add_argument('--seed', type=int)
+    parser.add_argument('--run-id', help='Identificador estÃ¡vel compartilhado entre as tarefas do orquestrador.')
+    parser.add_argument('--steps', nargs='+', choices=dependency_order(),
+                        help='Executa somente estas etapas, respeitando a ordem de dependÃªncia.')
     parser.add_argument('--dry-run', action='store_true', help='Exibe ordem e sorteios sem conexão ou escrita.')
     args = parser.parse_args()
     if not 100 <= args.average_records <= 100000:
         parser.error('--average-records deve estar entre 100 e 100000.')
+    if args.steps:
+        return run_steps(args.steps, args.average_records, args.seed, args.run_id, args.dry_run)
     return run_all(args.average_records, args.seed, args.dry_run)
 
 
